@@ -22,6 +22,15 @@ export const generateRoutePlan = async (
     return `- ${row.Nome} (${row.Endereco || 'Endereço não especificado'}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}`;
   }).join('\n');
 
+  // Determine locations
+  const startLocationStr = preferences.useCurrentLocation 
+    ? 'Minha localização atual (lat/long fornecida)' 
+    : preferences.startLocation;
+
+  const endLocationStr = preferences.returnToStart 
+    ? startLocationStr 
+    : preferences.endLocation;
+
   const prompt = `
     Atue como um especialista avançado em logística e roteirização urbana.
     
@@ -32,7 +41,8 @@ export const generateRoutePlan = async (
     - Horário de Saída Diária: ${preferences.departureTime}
     - Horário MÁXIMO de Retorno (Fim da jornada): ${preferences.returnTime}
     - Duração Fixa por Visita: ${preferences.visitDurationMinutes} minutos
-    - Local Base (Início/Fim): ${preferences.useCurrentLocation ? 'Minha localização atual (lat/long fornecida)' : preferences.startLocation}
+    - Local de Partida (Início): ${startLocationStr}
+    - Local de Chegada (Fim): ${endLocationStr}
     
     PARADAS OBRIGATÓRIAS (Inserir estrategicamente a cada dia se necessário):
     - Abastecer? ${preferences.needsFuel ? 'SIM' : 'NÃO'}
@@ -46,10 +56,11 @@ export const generateRoutePlan = async (
     REGRAS DE OURO:
     1. **Prioridades**: Respeite RIGOROSAMENTE as marcações [PRIORIDADE ALTA], [VISITA DE ALMOÇO] e [FIM DO DIA]. Se um cliente tem prioridade alta, ele deve ser um dos primeiros.
     2. **Respeito ao Tempo**: Você deve somar o tempo de deslocamento + tempo de visita (${preferences.visitDurationMinutes} min) para cada parada.
-    3. **Divisão em Dias**: Se a soma dos tempos ultrapassar o Horário Máximo de Retorno (${preferences.returnTime}), encerre o dia, mande o motorista voltar para a base, e inicie um "Dia 2" (dia seguinte) com as visitas restantes. Continue criando dias até zerar a lista.
-    4. **Geolocalização**: Use a ferramenta Google Maps para validar endereços e estimar tempos reais de trânsito. Agrupe visitas próximas no mesmo dia para economizar tempo, desde que não viole as prioridades.
-    5. **Riscos**: Verifique alagamentos e zonas de guincho.
-    6. **Formato**: Retorne APENAS o JSON. Não use markdown. Não escreva introduções.
+    3. **Ponto de Partida e Chegada**: A rota de CADA dia deve começar no "Local de Partida" e deve ser desenhada para terminar próxima ao "Local de Chegada" no final do expediente.
+    4. **Divisão em Dias**: Se a soma dos tempos ultrapassar o Horário Máximo de Retorno (${preferences.returnTime}), encerre o dia, mande o motorista para o Local de Chegada, e inicie um "Dia 2" (dia seguinte) com as visitas restantes. Continue criando dias até zerar a lista.
+    5. **Geolocalização**: Use a ferramenta Google Maps para validar endereços e estimar tempos reais de trânsito. Agrupe visitas próximas no mesmo dia para economizar tempo, desde que não viole as prioridades.
+    6. **Riscos**: Verifique alagamentos e zonas de guincho.
+    7. **Formato**: Retorne APENAS o JSON. Não use markdown. Não escreva introduções.
 
     FORMATO DE RESPOSTA (JSON Array):
     [

@@ -28,6 +28,8 @@ export interface UserPreferences {
   visitDurationMinutes: number;
   startLocation: string;
   useCurrentLocation: boolean;
+  returnToStart: boolean; // If true, endLocation is ignored (loop)
+  endLocation: string;    // Used if returnToStart is false
   needsFuel: boolean;
   needsOfficePickup: boolean;
   needsLunch: boolean;
