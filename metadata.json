@@ -1,0 +1,7 @@
+{
+  "name": "Roteirizador Diário Inteligente",
+  "description": "Sistema de otimização de rotas diárias utilizando Google Gemini e Maps Grounding para organizar visitas, paradas e logística.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
