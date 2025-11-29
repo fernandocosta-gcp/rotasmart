@@ -18,8 +18,13 @@ export const generateRoutePlan = async (
     const timeConstraints = (row.HorarioAbertura || row.HorarioFechamento) 
       ? ` (Horário: ${row.HorarioAbertura || '?'} às ${row.HorarioFechamento || '?'})` 
       : '';
+      
+    // Include custom parking info if present
+    const parkingInfo = row.customParkingInfo 
+      ? ` [INFO ESTACIONAMENTO: ${row.customParkingInfo}]` 
+      : '';
 
-    return `- ${row.Nome} (${row.Endereco || 'Endereço não especificado'}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}`;
+    return `- ${row.Nome} (${row.Endereco || 'Endereço não especificado'}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}`;
   }).join('\n');
 
   // Determine locations
@@ -31,43 +36,73 @@ export const generateRoutePlan = async (
     ? startLocationStr 
     : preferences.endLocation;
 
+  // Build Office Instruction
+  let officeInstruction = "NÃO";
+  if (preferences.officeSettings.enabled) {
+      const freqMap: Record<string, string> = {
+          'all_days': 'Todos os dias da rota',
+          'first_day': 'Apenas no 1º dia',
+          'last_day': 'Apenas no último dia da rota'
+      };
+      const timingMap: Record<string, string> = {
+          'morning': 'Manhã (após a saída)',
+          'lunch': 'Próximo ao almoço',
+          'afternoon': 'Final da tarde (antes do encerramento)'
+      };
+      
+      officeInstruction = `SIM.
+      - Frequência: ${freqMap[preferences.officeSettings.frequency]}
+      - Horário Preferencial: ${timingMap[preferences.officeSettings.timing]}
+      - Duração da parada: ${preferences.officeSettings.durationMinutes} minutos`;
+  }
+
   const prompt = `
-    Atue como um especialista avançado em logística e roteirização urbana.
+    Atue como um Solver de Roteirização Avançado (Vehicle Routing Problem - VRP).
     
-    OBJETIVO: Criar um cronograma de visitas otimizado, DIVIDIDO EM MÚLTIPLOS DIAS se necessário, respeitando estritamente os horários limites e as PRIORIDADES definidas.
+    OBJETIVO: Criar um cronograma de visitas otimizado, DIVIDIDO EM MÚLTIPLOS DIAS se necessário, minimizando a distância total e o tempo de deslocamento.
+    
+    ESTRATÉGIA ALGORÍTMICA APLICADA:
+    Utilize uma abordagem híbrida simulando as seguintes heurísticas:
+    1. **Clustering (Agrupamento Geográfico):** Agrupe as visitas que estão geograficamente próximas (bairros/regiões vizinhas) no mesmo dia para evitar deslocamentos longos desnecessários.
+    2. **Nearest Neighbor (Vizinho Mais Próximo):** A partir do ponto atual, selecione o próximo ponto mais próximo que atenda às restrições de tempo, criando uma cadeia lógica.
+    3. **Sweep Algorithm (Varredura):** Organize as paradas em um fluxo direcional lógico (ex: sentido horário ou linear) para evitar cruzamentos de rota (ziguezague) e retornos (backtracking).
     
     DADOS DO PLANEJAMENTO:
     - Data de Início: ${preferences.departureDate}
     - Horário de Saída Diária: ${preferences.departureTime}
     - Horário MÁXIMO de Retorno (Fim da jornada): ${preferences.returnTime}
-    - Duração Fixa por Visita: ${preferences.visitDurationMinutes} minutos
+    - Duração Fixa por Visita (Cliente): ${preferences.visitDurationMinutes} minutos
     - Local de Partida (Início): ${startLocationStr}
     - Local de Chegada (Fim): ${endLocationStr}
     
-    PARADAS OBRIGATÓRIAS (Inserir estrategicamente a cada dia se necessário):
+    PARADAS OBRIGATÓRIAS E REGRAS ESPECIAIS:
     - Abastecer? ${preferences.needsFuel ? 'SIM' : 'NÃO'}
-    - Passar no escritório? ${preferences.needsOfficePickup ? 'SIM' : 'NÃO'}
-    - Almoço? ${preferences.needsLunch ? 'SIM (1 hora)' : 'NÃO'}
+    - Almoço? ${preferences.needsLunch ? 'SIM (1 hora - Janela 11:30 a 13:30)' : 'NÃO'}
     - Preferência de Estacionamento: ${preferences.parkingPreference === 'blue_zone' ? 'Zona Azul' : preferences.parkingPreference === 'paid' ? 'Estacionamento Pago' : 'Rua/Livre'}
+    
+    --- CONFIGURAÇÃO DO ESCRITÓRIO ---
+    - Passar no escritório? ${officeInstruction}
+    ----------------------------------
 
-    LISTA DE CLIENTES E PRIORIDADES:
+    LISTA DE CLIENTES E PRIORIDADES (Input Nodes):
     ${stopsList}
 
-    REGRAS DE OURO:
-    1. **Prioridades**: Respeite RIGOROSAMENTE as marcações [PRIORIDADE ALTA], [VISITA DE ALMOÇO] e [FIM DO DIA]. Se um cliente tem prioridade alta, ele deve ser um dos primeiros.
-    2. **Respeito ao Tempo**: Você deve somar o tempo de deslocamento + tempo de visita (${preferences.visitDurationMinutes} min) para cada parada.
-    3. **Ponto de Partida e Chegada**: A rota de CADA dia deve começar no "Local de Partida" e deve ser desenhada para terminar próxima ao "Local de Chegada" no final do expediente.
-    4. **Divisão em Dias**: Se a soma dos tempos ultrapassar o Horário Máximo de Retorno (${preferences.returnTime}), encerre o dia, mande o motorista para o Local de Chegada, e inicie um "Dia 2" (dia seguinte) com as visitas restantes. Continue criando dias até zerar a lista.
-    5. **Geolocalização**: Use a ferramenta Google Maps para validar endereços e estimar tempos reais de trânsito. Agrupe visitas próximas no mesmo dia para economizar tempo, desde que não viole as prioridades.
-    6. **Riscos**: Verifique alagamentos e zonas de guincho.
-    7. **Formato**: Retorne APENAS o JSON. Não use markdown. Não escreva introduções.
+    REGRAS DE RESTRIÇÃO (Hard Constraints):
+    1. **Prioridades**: Respeite RIGOROSAMENTE as marcações [PRIORIDADE ALTA], [VISITA DE ALMOÇO] e [FIM DO DIA]. Prioridades altas "furam" a fila lógica, mas tente encaixá-las sem destruir a eficiência geográfica se possível.
+    2. **Respeito ao Tempo**: Você deve somar o tempo de deslocamento (estimativa realista de trânsito urbano) + tempo de visita (${preferences.visitDurationMinutes} min) para cada parada.
+    3. **Ciclo Diário**: A rota de CADA dia deve começar no "Local de Partida" e deve ser desenhada para terminar próxima ao "Local de Chegada" no final do expediente.
+    4. **Múltiplos Dias**: Se a soma dos tempos ultrapassar o Horário Máximo de Retorno (${preferences.returnTime}), encerre o dia (retorne ao fim) e inicie um novo dia com os nós restantes.
+    5. **Lógica do Escritório**: Se "Passar no escritório" for SIM, trate como um nó obrigatório respeitando a janela de tempo solicitada.
+    6. **Geolocalização**: Use o conhecimento do Google Maps para validar a proximidade real.
+    7. **Info Estacionamento**: Se a visita tiver [INFO ESTACIONAMENTO], inclua esse texto EXATAMENTE como está no campo "parkingSuggestion".
 
     FORMATO DE RESPOSTA (JSON Array):
+    Retorne APENAS o JSON. Sem markdown, sem explicações.
     [
       {
         "dayLabel": "Dia 1",
         "date": "YYYY-MM-DD",
-        "summary": "Resumo da rota do dia 1",
+        "summary": "Resumo estratégico da rota (ex: Zona Sul -> Centro)",
         "totalDistanceKm": "X km",
         "totalTimeHours": "X horas",
         "stops": [
@@ -78,8 +113,8 @@ export const generateRoutePlan = async (
             "type": "Cliente",
             "address": "Endereço",
             "estimatedArrival": "HH:MM",
-            "durationMinutes": ${preferences.visitDurationMinutes}, // (ou tempo de almoço/posto)
-            "notes": "Nota sobre deslocamento ou parada",
+            "durationMinutes": ${preferences.visitDurationMinutes},
+            "notes": "Motivo da sequência (ex: 'Próximo ao anterior')",
             "risks": { "flood": boolean, "towing": boolean, "description": "..." },
             "parkingSuggestion": "...",
             "phoneNumber": "...",

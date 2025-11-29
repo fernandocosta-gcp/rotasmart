@@ -18,7 +18,15 @@ export interface RawSheetRow {
   HorarioAbertura?: string;
   HorarioFechamento?: string;
   priority: PriorityLevel;
+  customParkingInfo?: string; // New field for specific parking details
   [key: string]: any;
+}
+
+export interface OfficeSettings {
+  enabled: boolean;
+  frequency: 'all_days' | 'first_day' | 'last_day';
+  timing: 'morning' | 'lunch' | 'afternoon';
+  durationMinutes: number;
 }
 
 export interface UserPreferences {
@@ -31,7 +39,7 @@ export interface UserPreferences {
   returnToStart: boolean; // If true, endLocation is ignored (loop)
   endLocation: string;    // Used if returnToStart is false
   needsFuel: boolean;
-  needsOfficePickup: boolean;
+  officeSettings: OfficeSettings;
   needsLunch: boolean;
   parkingPreference: 'street' | 'paid' | 'blue_zone';
 }

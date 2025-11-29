@@ -18,7 +18,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     returnToStart: true,
     endLocation: '',
     needsFuel: false,
-    needsOfficePickup: false,
+    officeSettings: {
+        enabled: false,
+        frequency: 'all_days',
+        timing: 'morning',
+        durationMinutes: 30
+    },
     needsLunch: true,
     parkingPreference: 'paid'
   });
@@ -29,6 +34,11 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   
   // State for delete confirmation modal
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+
+  // State for Parking Info Modal
+  const [parkingModalOpen, setParkingModalOpen] = useState(false);
+  const [currentParkingId, setCurrentParkingId] = useState<string | null>(null);
+  const [parkingText, setParkingText] = useState('');
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -50,6 +60,28 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   const updatePriority = (id: string, priority: PriorityLevel) => {
     setSheetData(prev => prev.map(row => row.id === id ? { ...row, priority } : row));
     setActiveMenuId(null);
+  };
+
+  // Parking Info Handlers
+  const openParkingModal = (id: string) => {
+      const row = sheetData.find(r => r.id === id);
+      if (row) {
+          setCurrentParkingId(id);
+          setParkingText(row.customParkingInfo || '');
+          setParkingModalOpen(true);
+          setActiveMenuId(null);
+      }
+  };
+
+  const saveParkingInfo = () => {
+      if (currentParkingId) {
+          setSheetData(prev => prev.map(row => 
+              row.id === currentParkingId ? { ...row, customParkingInfo: parkingText } : row
+          ));
+          setParkingModalOpen(false);
+          setCurrentParkingId(null);
+          setParkingText('');
+      }
   };
 
   const promptDelete = (id: string) => {
@@ -166,7 +198,13 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={row.Endereco}>
-                                            {row.Endereco}
+                                            <div>{row.Endereco}</div>
+                                            {row.customParkingInfo && (
+                                                <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
+                                                    <span className="mr-1">🅿️</span>
+                                                    {row.customParkingInfo}
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                                             <div className="flex flex-col">
@@ -191,7 +229,18 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                     onClick={() => setActiveMenuId(null)}
                                                 ></div>
                                                 <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-20 border border-gray-100 py-1">
-                                                    <div className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Priorizar</div>
+                                                    <div className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Ações</div>
+                                                    
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => openParkingModal(row.id)}
+                                                        className="block w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50"
+                                                    >
+                                                        🅿️ Info Estacionamento
+                                                    </button>
+
+                                                    <div className="border-t border-gray-100 my-1"></div>
+                                                    
                                                     <button 
                                                         type="button"
                                                         onClick={() => updatePriority(row.id, 'high')}
@@ -252,43 +301,43 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     type="date" 
                                     value={prefs.departureDate}
                                     onChange={(e) => setPrefs({...prefs, departureDate: e.target.value})}
-                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                 />
                             </div>
                             <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Visita (min)</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Tempo de Visita (min)</label>
                                 <input 
                                     type="number" 
                                     min="5"
                                     max="480"
                                     value={prefs.visitDurationMinutes}
                                     onChange={(e) => setPrefs({...prefs, visitDurationMinutes: parseInt(e.target.value) || 0})}
-                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                 />
                             </div>
                             <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Saída</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Horário de Saída</label>
                                 <input 
                                     type="time" 
                                     value={prefs.departureTime}
                                     onChange={(e) => setPrefs({...prefs, departureTime: e.target.value})}
-                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                 />
                             </div>
                             <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Retorno</label>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Horário de Retorno</label>
                                 <input 
                                     type="time" 
                                     value={prefs.returnTime}
                                     onChange={(e) => setPrefs({...prefs, returnTime: e.target.value})}
-                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full px-2 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                 />
                             </div>
                         </div>
                     </div>
 
                     <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">Locais</label>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Defina ponto de partida e retorno</label>
                         
                         {/* Start Location */}
                         <div className="mb-3">
@@ -300,7 +349,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     value={prefs.startLocation}
                                     disabled={prefs.useCurrentLocation}
                                     onChange={(e) => setPrefs({...prefs, startLocation: e.target.value})}
-                                    className={`w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none ${prefs.useCurrentLocation ? 'bg-gray-100' : ''}`}
+                                    className={`w-full px-3 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none placeholder-gray-400 ${prefs.useCurrentLocation ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 />
                                 <button
                                     type="button"
@@ -333,7 +382,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                         placeholder="Endereço de chegada"
                                         value={prefs.endLocation}
                                         onChange={(e) => setPrefs({...prefs, endLocation: e.target.value})}
-                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none placeholder-gray-400"
                                     />
                                 </div>
                             )}
@@ -343,15 +392,65 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-4">
                         <div>
                             <h3 className="text-sm font-semibold text-gray-700 mb-2">Obrigatórios</h3>
-                            <div className="space-y-1">
+                            <div className="space-y-3">
                                 <label className="flex items-center space-x-2 cursor-pointer p-1 rounded hover:bg-gray-50">
                                     <input type="checkbox" checked={prefs.needsFuel} onChange={(e) => setPrefs({...prefs, needsFuel: e.target.checked})} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"/>
                                     <span className="text-gray-700 text-sm">Abastecer</span>
                                 </label>
-                                <label className="flex items-center space-x-2 cursor-pointer p-1 rounded hover:bg-gray-50">
-                                    <input type="checkbox" checked={prefs.needsOfficePickup} onChange={(e) => setPrefs({...prefs, needsOfficePickup: e.target.checked})} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"/>
-                                    <span className="text-gray-700 text-sm">Passar no Escritório</span>
-                                </label>
+                                
+                                {/* Office Stop Settings */}
+                                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                                    <label className="flex items-center space-x-2 cursor-pointer mb-2">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={prefs.officeSettings.enabled} 
+                                            onChange={(e) => setPrefs({...prefs, officeSettings: {...prefs.officeSettings, enabled: e.target.checked}})} 
+                                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                                        />
+                                        <span className="text-gray-700 text-sm font-medium">Passar no Escritório</span>
+                                    </label>
+                                    
+                                    {prefs.officeSettings.enabled && (
+                                        <div className="pl-6 space-y-2 animate-fade-in-up">
+                                            <div>
+                                                <label className="block text-xs text-gray-500 mb-1">Frequência</label>
+                                                <select 
+                                                    value={prefs.officeSettings.frequency}
+                                                    onChange={(e) => setPrefs({...prefs, officeSettings: {...prefs.officeSettings, frequency: e.target.value as any}})}
+                                                    className="w-full text-xs p-1.5 border border-gray-600 rounded bg-gray-700 text-white outline-none"
+                                                >
+                                                    <option value="all_days">Todos os Dias</option>
+                                                    <option value="first_day">Apenas Primeiro Dia</option>
+                                                    <option value="last_day">Apenas Último Dia</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-500 mb-1">Período</label>
+                                                <select 
+                                                    value={prefs.officeSettings.timing}
+                                                    onChange={(e) => setPrefs({...prefs, officeSettings: {...prefs.officeSettings, timing: e.target.value as any}})}
+                                                    className="w-full text-xs p-1.5 border border-gray-600 rounded bg-gray-700 text-white outline-none"
+                                                >
+                                                    <option value="morning">Manhã (Início)</option>
+                                                    <option value="lunch">Próximo ao Almoço</option>
+                                                    <option value="afternoon">Final do Dia</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-500 mb-1">Duração (min)</label>
+                                                <input 
+                                                    type="number"
+                                                    min="5"
+                                                    max="240"
+                                                    value={prefs.officeSettings.durationMinutes}
+                                                    onChange={(e) => setPrefs({...prefs, officeSettings: {...prefs.officeSettings, durationMinutes: parseInt(e.target.value) || 0}})}
+                                                    className="w-full text-xs p-1.5 border border-gray-600 rounded bg-gray-700 text-white outline-none"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
                                 <label className="flex items-center space-x-2 cursor-pointer p-1 rounded hover:bg-gray-50">
                                     <input type="checkbox" checked={prefs.needsLunch} onChange={(e) => setPrefs({...prefs, needsLunch: e.target.checked})} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"/>
                                     <span className="text-gray-700 text-sm">Almoço (1h)</span>
@@ -438,6 +537,45 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                             className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
                         >
                             Confirmar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Parking Info Modal */}
+        {parkingModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
+                <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 transform transition-all scale-100 animate-fade-in-up">
+                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-indigo-100 mx-auto mb-4">
+                        <span className="text-2xl">🅿️</span>
+                    </div>
+                    <h3 className="text-lg font-bold text-center text-gray-900 mb-2">Informação de Estacionamento</h3>
+                    <p className="text-gray-500 text-center text-sm mb-4">
+                        Adicione detalhes específicos para este local (ex: "Entrada pela lateral", "Vagas limitadas", "Conveniado").
+                    </p>
+                    
+                    <textarea 
+                        value={parkingText}
+                        onChange={(e) => setParkingText(e.target.value)}
+                        placeholder="Digite os detalhes do estacionamento..."
+                        className="w-full h-24 p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm mb-6 resize-none placeholder-gray-400"
+                    ></textarea>
+
+                    <div className="flex gap-3">
+                        <button
+                            type="button"
+                            onClick={() => { setParkingModalOpen(false); setCurrentParkingId(null); setParkingText(''); }}
+                            className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            type="button"
+                            onClick={saveParkingInfo}
+                            className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+                        >
+                            Salvar
                         </button>
                     </div>
                 </div>
