@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MultiDayPlan, EstablishmentType } from '../types';
+import { MultiDayPlan, EstablishmentType, RouteStop } from '../types';
 
 interface ItineraryProps {
   plan: MultiDayPlan;
@@ -41,6 +41,106 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
     }
   };
 
+  const getWeatherIcon = (condition: string = '', isStormy: boolean = false) => {
+     const lowerCond = condition.toLowerCase();
+     
+     if (isStormy || lowerCond.includes('tempestade') || lowerCond.includes('trovoada')) {
+        return <span className="text-xl" title="Tempestade">⛈️</span>;
+     }
+     if (lowerCond.includes('chuva') || lowerCond.includes('garoa')) {
+        return <span className="text-xl" title="Chuva">🌧️</span>;
+     }
+     if (lowerCond.includes('nublado') || lowerCond.includes('nuvens')) {
+        return <span className="text-xl" title="Nublado">☁️</span>;
+     }
+     return <span className="text-xl" title="Ensolarado/Limpo">☀️</span>;
+  };
+
+  // --- CALENDAR HELPERS ---
+
+  const formatDateForCalendar = (dateStr: string, timeStr: string) => {
+     // dateStr: YYYY-MM-DD, timeStr: HH:MM
+     const d = new Date(`${dateStr}T${timeStr}:00`);
+     const pad = (n: number) => n < 10 ? '0' + n : String(n);
+     return d.getFullYear() +
+            pad(d.getMonth() + 1) +
+            pad(d.getDate()) + 'T' +
+            pad(d.getHours()) +
+            pad(d.getMinutes()) + '00';
+  };
+
+  const getGoogleCalendarLink = (stop: RouteStop, date: string) => {
+    // Calculates end time based on duration
+    const startDate = new Date(`${date}T${stop.estimatedArrival}:00`);
+    const endDate = new Date(startDate.getTime() + Number(stop.durationMinutes) * 60000);
+    
+    const pad = (n: number) => n < 10 ? '0' + n : String(n);
+    const formatTime = (d: Date) => pad(d.getHours()) + ':' + pad(d.getMinutes());
+    
+    const startStr = formatDateForCalendar(date, stop.estimatedArrival);
+    const endStr = formatDateForCalendar(date, formatTime(endDate));
+    
+    const title = encodeURIComponent(`Visita ${stop.name}`);
+    const details = encodeURIComponent(`Endereço: ${stop.address}\n\nObs: ${stop.notes}\n\nRisco: ${stop.risks.description || 'Nenhum'}`);
+    const location = encodeURIComponent(stop.address);
+
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startStr}/${endStr}&details=${details}&location=${location}`;
+  };
+
+  const downloadDayICS = () => {
+    let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RotaSmartAI//BR\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\n";
+    
+    // Helper to format date to UTC (YYYYMMDDTHHmmssZ) required for max compatibility
+    const formatToUTC = (d: Date) => {
+        const pad = (n: number) => n < 10 ? '0' + n : String(n);
+        return d.getUTCFullYear() +
+               pad(d.getUTCMonth() + 1) +
+               pad(d.getUTCDate()) + 'T' +
+               pad(d.getUTCHours()) +
+               pad(d.getUTCMinutes()) +
+               pad(d.getUTCSeconds()) + 'Z';
+    };
+
+    const now = new Date();
+    const dtStamp = formatToUTC(now);
+
+    currentDay.stops.forEach(stop => {
+        // Create date object based on browser's local time context
+        // This assumes the user wants the event at "08:00" in their current timezone context
+        const startDate = new Date(`${currentDay.date}T${stop.estimatedArrival}:00`);
+        const endDate = new Date(startDate.getTime() + Number(stop.durationMinutes) * 60000);
+        
+        // Generate a unique ID to prevent duplicates on re-import
+        const uid = `${stop.id || Math.random().toString(36).substr(2, 9)}@rotasmart.ai`;
+
+        icsContent += "BEGIN:VEVENT\n";
+        icsContent += `UID:${uid}\n`;
+        icsContent += `DTSTAMP:${dtStamp}\n`;
+        // Using UTC (Z) forces Google Calendar to calculate the time based on the user's calendar settings
+        // ensuring 08:00 local time appears correctly rather than floating.
+        icsContent += `DTSTART:${formatToUTC(startDate)}\n`;
+        icsContent += `DTEND:${formatToUTC(endDate)}\n`;
+        icsContent += `SUMMARY:Visita ${stop.name}\n`;
+        // Handle commas in address as per RFC 5545
+        const safeAddress = stop.address ? stop.address.replace(/,/g, '\\,') : '';
+        icsContent += `LOCATION:${safeAddress}\n`;
+        
+        const description = `Obs: ${stop.notes || ''}\\nRisco: ${stop.risks.description || 'N/A'}`;
+        icsContent += `DESCRIPTION:${description}\n`;
+        icsContent += "END:VEVENT\n";
+    });
+
+    icsContent += "END:VCALENDAR";
+
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    link.setAttribute('download', `agenda_${currentDay.date}.ics`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="max-w-4xl mx-auto p-4">
       
@@ -70,24 +170,58 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
 
       {/* Active Day Summary */}
       <div className="bg-white rounded-2xl shadow-lg p-6 mb-8 border border-gray-200">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
+        <div className="flex flex-col gap-4">
             <div>
-                <div className="flex items-center gap-2 mb-2">
-                    <h3 className="text-xl font-bold text-gray-900">{currentDay.dayLabel} - {currentDay.date}</h3>
+                <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
+                    <div>
+                        <div className="flex items-center gap-2 mb-2">
+                            <h3 className="text-xl font-bold text-gray-900">{currentDay.dayLabel} - {currentDay.date}</h3>
+                        </div>
+                        <p className="text-gray-600 text-sm">{currentDay.summary}</p>
+                    </div>
+                    
+                    {/* Bulk Action: Download ICS */}
+                    <button 
+                        onClick={downloadDayICS}
+                        className="flex items-center justify-center px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-semibold transition-colors border border-indigo-200 shadow-sm"
+                        title="Baixar arquivo de agenda para Outlook, Apple Calendar, etc."
+                    >
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                        Baixar Agenda do Dia (.ics)
+                    </button>
                 </div>
-                <p className="text-gray-600 text-sm mb-3">{currentDay.summary}</p>
-                <div className="flex space-x-6 text-gray-700 text-sm">
-                    <div className="flex items-center bg-blue-50 px-3 py-1 rounded-lg">
-                        <svg className="w-4 h-4 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        <span className="font-semibold">{currentDay.totalTimeHours}</span>
+                
+                {/* Stats Grid - Responsive */}
+                <div className="flex flex-wrap gap-3 text-gray-700 text-sm">
+                    {/* Tempo */}
+                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
+                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <span className="font-semibold whitespace-nowrap">{currentDay.totalTimeHours}</span>
                     </div>
-                    <div className="flex items-center bg-blue-50 px-3 py-1 rounded-lg">
-                        <svg className="w-4 h-4 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
-                        <span className="font-semibold">{currentDay.totalDistanceKm}</span>
+                    {/* Distância */}
+                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
+                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                        <span className="font-semibold whitespace-nowrap">{currentDay.totalDistanceKm}</span>
                     </div>
-                    <div className="flex items-center bg-blue-50 px-3 py-1 rounded-lg">
-                        <svg className="w-4 h-4 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                        <span className="font-semibold">{currentDay.stops.length} Paradas</span>
+                    {/* Paradas */}
+                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
+                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        <span className="font-semibold whitespace-nowrap">{currentDay.stops.length} Paradas</span>
+                    </div>
+
+                    {/* Divisor Visual para Custos */}
+                    <div className="hidden md:block w-px bg-gray-300 mx-2 h-8 self-center"></div>
+
+                    {/* Combustível Estimado */}
+                    <div className="flex items-center bg-green-50 px-3 py-2 rounded-lg border border-green-100 flex-grow md:flex-grow-0" title="Estimativa para Carro 1.0 Gasolina (R$6/L)">
+                        <svg className="w-4 h-4 mr-2 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        <span className="font-semibold text-green-800 whitespace-nowrap">{currentDay.estimatedFuelCost || 'R$ --'}</span>
+                    </div>
+
+                    {/* Estacionamento Estimado */}
+                    <div className="flex items-center bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100 flex-grow md:flex-grow-0">
+                        <span className="mr-2 text-lg leading-none">🅿️</span>
+                        <span className="font-semibold text-indigo-800 whitespace-nowrap">{currentDay.estimatedParkingCost || 'R$ --'}</span>
                     </div>
                 </div>
             </div>
@@ -131,6 +265,28 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
                   <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                   {stop.address}
                 </p>
+
+                {/* Weather Section (NEW) */}
+                {stop.weather && (
+                    <div className={`mb-4 p-3 rounded-lg border flex items-center gap-4 ${stop.weather.isStormy ? 'bg-red-50 border-red-200' : 'bg-sky-50 border-sky-100'}`}>
+                        <div className="flex items-center gap-2">
+                            {getWeatherIcon(stop.weather.condition, stop.weather.isStormy)}
+                            <div className="flex flex-col">
+                                <span className="font-bold text-gray-800 text-sm leading-tight">{stop.weather.temp}</span>
+                                <span className="text-xs text-gray-600">{stop.weather.condition}</span>
+                            </div>
+                        </div>
+                        <div className="h-8 w-px bg-gray-300"></div>
+                        <div className="text-xs text-gray-700">
+                             <div>Chuva: <strong>{stop.weather.chanceOfRain}</strong></div>
+                             {stop.weather.isStormy && (
+                                 <div className="text-red-700 font-bold uppercase mt-1 flex items-center">
+                                     ⚠️ Alerta de Tempestade
+                                 </div>
+                             )}
+                        </div>
+                    </div>
+                )}
 
                 {/* Metadata Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
@@ -187,16 +343,30 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
                 )}
 
                 <div className="flex justify-between items-center pt-3 border-t border-gray-100">
-                    <span className="text-xs text-gray-400 italic">{stop.notes}</span>
-                    <a 
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`} 
-                      target="_blank" 
-                      rel="noreferrer"
-                      className="text-blue-600 hover:text-blue-800 font-semibold text-sm flex items-center"
-                    >
-                        Abrir no Maps
-                        <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                    </a>
+                    <span className="text-xs text-gray-400 italic mr-2 truncate flex-1">{stop.notes}</span>
+                    <div className="flex gap-2">
+                        {/* Google Calendar Action */}
+                        <a 
+                            href={getGoogleCalendarLink(stop, currentDay.date)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-100 border border-gray-200 transition-colors"
+                        >
+                            <svg className="w-4 h-4 mr-1.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            Agendar
+                        </a>
+
+                        {/* Maps Action */}
+                        <a 
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-semibold rounded-lg hover:bg-blue-100 border border-blue-200 transition-colors"
+                        >
+                            Maps
+                            <svg className="w-4 h-4 ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                        </a>
+                    </div>
                 </div>
               </div>
             </div>

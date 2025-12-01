@@ -1,11 +1,26 @@
-import React, { useState, ChangeEvent } from 'react';
-import { UserPreferences, RawSheetRow, PriorityLevel } from '../types';
-import { parseSheetFile } from '../services/excelService';
+import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
+import { UserPreferences, RawSheetRow, PriorityLevel, POSHealthData } from '../types';
+import { parseSheetFile, loadHealthBaseFromAssets, mergeRouteAndHealthData } from '../services/excelService';
 
 interface SetupFormProps {
   onGenerate: (prefs: UserPreferences, data: RawSheetRow[]) => void;
   isLoading: boolean;
 }
+
+const BUSINESS_SECTORS = [
+  "Saúde (Farmácia)", 
+  "Varejo (Moda)", 
+  "Serviços (Pet)", 
+  "Varejo (Escritório)", 
+  "Serviços (Tecnologia)", 
+  "Alimentos (Varejo)", 
+  "Serviços (Saúde)", 
+  "Serviços (Educação)", 
+  "Saúde (Ótica)", 
+  "Serviços (Beleza)", 
+  "Varejo (Diversos)", 
+  "Varejo (Automotivo)"
+];
 
 const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   const [prefs, setPrefs] = useState<UserPreferences>({
@@ -28,38 +43,144 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     lunchDurationMinutes: 60,
     parkingPreference: 'paid'
   });
+  
   const [sheetData, setSheetData] = useState<RawSheetRow[]>([]);
+  const [healthMap, setHealthMap] = useState<Map<string, POSHealthData[]> | null>(null);
+  const [healthBaseStatus, setHealthBaseStatus] = useState<string>('Carregando base de saúde...');
+  
   const [fileName, setFileName] = useState<string>('');
   const [error, setError] = useState<string>('');
   
+  // State for Import Filter Modal
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [tempSheetData, setTempSheetData] = useState<RawSheetRow[]>([]);
+  const [selectedSectors, setSelectedSectors] = useState<string[]>(BUSINESS_SECTORS);
+  const [importMode, setImportMode] = useState<'all' | 'filter'>('all');
+  
+  // New state for file processing feedback
+  const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // State for bulk selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   // State for delete confirmation modal
-  const [itemToDelete, setItemToDelete] = useState<string | null>(null); // For single delete (kept for safety/logic reuse)
-  const [isBulkDelete, setIsBulkDelete] = useState(false); // Flag for bulk delete
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null); 
+  const [isBulkDelete, setIsBulkDelete] = useState(false); 
 
   // State for Parking Info Modal
   const [parkingModalOpen, setParkingModalOpen] = useState(false);
   const [currentParkingId, setCurrentParkingId] = useState<string | null>(null);
   const [parkingText, setParkingText] = useState('');
 
+  // State for POS Health Modal
+  const [posModalOpen, setPosModalOpen] = useState(false);
+  const [selectedPosData, setSelectedPosData] = useState<{name: string, data: POSHealthData[]} | null>(null);
+
+  // --- EFFECT: Load Static Health Base ---
+  useEffect(() => {
+    const loadHealth = async () => {
+        try {
+            const map = await loadHealthBaseFromAssets();
+            if (map.size > 0) {
+                setHealthMap(map);
+                setHealthBaseStatus(`✓ Base conectada (${map.size} estabelecimentos)`);
+            } else {
+                setHealthBaseStatus('⚠️ Base "assets/base_saude.xlsx" não encontrada. Usando dados simulados.');
+            }
+        } catch (e) {
+            setHealthBaseStatus('❌ Erro ao carregar base de saúde.');
+        }
+    };
+    loadHealth();
+  }, []);
+
+  // 1. ROUTE FILE UPLOAD
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setFileName(file.name);
+      setIsProcessingFile(true); // Show loading state
+      setError(''); // Clear previous errors
+
       try {
+        // Add a small artificial delay to allow UI to update to "Processing" state
+        await new Promise(r => setTimeout(r, 100));
+
         const data = await parseSheetFile(file);
-        if (data.length === 0) throw new Error("Arquivo vazio ou formato inválido");
-        setSheetData(data);
-        setError('');
-        setSelectedIds([]);
+        
+        if (!data || data.length === 0) {
+            throw new Error("O arquivo parece vazio ou não contém colunas reconhecíveis (Nome, Endereço).");
+        }
+        
+        setTempSheetData(data);
+        setImportMode('all');
+        setSelectedSectors(BUSINESS_SECTORS);
+        setShowFilterModal(true);
+        
       } catch (err) {
-        console.error(err);
-        setError('Erro ao ler o arquivo. Use um .xlsx ou .csv válido.');
+        console.error("SetupForm File Error:", err);
+        const msg = (err as Error).message || 'Erro desconhecido ao ler arquivo.';
+        setError(`Erro na leitura: ${msg}`);
         setSheetData([]);
+        
+        // Force reset input manually
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+      } finally {
+        setIsProcessingFile(false);
+        e.target.value = ''; // Ensure reset
       }
     }
+  };
+
+  // Ensure input clears on click so "onChange" fires even for same file
+  const handleInputClick = (e: React.MouseEvent<HTMLInputElement>) => {
+      (e.target as HTMLInputElement).value = '';
+  };
+
+  const handleConfirmImport = () => {
+      let finalData: RawSheetRow[] = [];
+
+      if (importMode === 'all') {
+          finalData = tempSheetData;
+      } else {
+          const filtered = tempSheetData.filter(row => {
+              if (!row.Setor) return false;
+              return selectedSectors.some(s => s.toLowerCase() === row.Setor?.trim().toLowerCase());
+          });
+          
+          if (filtered.length === 0) {
+              alert("Nenhum estabelecimento encontrado com as categorias selecionadas.");
+              return; 
+          }
+          finalData = filtered;
+      }
+
+      // Automatically merge with pre-loaded health map
+      finalData = mergeRouteAndHealthData(finalData, healthMap);
+
+      setSheetData(finalData);
+      setShowFilterModal(false);
+      setTempSheetData([]);
+      setSelectedIds([]);
+  };
+
+  const toggleSector = (sector: string) => {
+      setImportMode('filter'); // Switch to filter mode if clicking a checkbox
+      setSelectedSectors(prev => 
+          prev.includes(sector) ? prev.filter(s => s !== sector) : [...prev, sector]
+      );
+  };
+
+  const toggleAllSectors = () => {
+      if (selectedSectors.length === BUSINESS_SECTORS.length) {
+          setSelectedSectors([]);
+          setImportMode('filter');
+      } else {
+          setSelectedSectors(BUSINESS_SECTORS);
+      }
   };
 
   // --- Bulk Actions Logic ---
@@ -82,13 +203,10 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       setSheetData(prev => prev.map(row => 
           selectedIds.includes(row.id) ? { ...row, priority } : row
       ));
-      // Optional: Clear selection after action? Let's keep it for now in case they want to do more.
-      // setSelectedIds([]); 
   };
 
   const promptBulkDelete = () => {
       setIsBulkDelete(true);
-      // We borrow the itemToDelete modal logic roughly, but use a specific flag
   };
 
   const confirmBulkDelete = () => {
@@ -129,6 +247,17 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     }
   };
 
+  // POS Modal Handler
+  const openPosModal = (row: RawSheetRow) => {
+      if (row.posData) {
+          setSelectedPosData({
+              name: row.Nome,
+              data: row.posData
+          });
+          setPosModalOpen(true);
+      }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (sheetData.length === 0) {
@@ -159,7 +288,116 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       }
   };
 
+  // POS Health Helper
+  // Lógica de Diagnóstico Geral
+  const getHealthStatus = (data: POSHealthData) => {
+      // Prioridade 1: Crítico (Erro alto)
+      if (data.errorRate >= 6) {
+          return { label: 'CRÍTICO', color: 'text-red-600 bg-red-100', border: 'border-red-200' };
+      }
+
+      // Prioridade 2: Comprometido (Problema de Bobina ou Sinal Baixo)
+      if (data.paperStatus !== 'OK' || data.signalStrength < 20) {
+           return { label: 'COMPROMETIDO', color: 'text-orange-600 bg-orange-100', border: 'border-orange-200' };
+      }
+
+      // Prioridade 3: Operativo (Condições ideais)
+      // Nota: Bobina 'OK' é implícito se não entrou no anterior, mas mantemos a clareza
+      if (data.errorRate < 6 && data.signalStrength > 40) {
+          return { label: 'OPERATIVO', color: 'text-green-600 bg-green-100', border: 'border-green-200' };
+      }
+
+      // Fallback: ATENÇÃO (Ex: Sinal entre 20% e 40% mas sem erro e com papel OK)
+      return { label: 'ATENÇÃO', color: 'text-yellow-600 bg-yellow-100', border: 'border-yellow-200' };
+  };
+
+  const getHealthAnalysis = (data: POSHealthData) => {
+      const issues = [];
+      const status = getHealthStatus(data).label;
+
+      if (status === 'CRÍTICO') issues.push("Taxa de erro muito elevada (>6%).");
+      if (status === 'COMPROMETIDO') {
+          if (data.paperStatus !== 'OK') issues.push("Bobina precisa de reposição.");
+          if (data.signalStrength < 20) issues.push("Sinal Wifi crítico (<20%).");
+      }
+      if (status === 'ATENÇÃO') issues.push("Sinal mediano (20-40%). Monitorar.");
+      
+      if (data.batteryLevel < 20) issues.push("Bateria baixa.");
+      if (data.incidents && data.incidents > 0) issues.push(`${data.incidents} incidentes abertos.`);
+
+      if (status === 'OPERATIVO') return "Equipamento em perfeito estado.";
+      if (issues.length === 0) return "Funcional.";
+      
+      return issues.join(' ');
+  };
+
   const itemToDeleteName = itemToDelete ? sheetData.find(r => r.id === itemToDelete)?.Nome : '';
+
+  // Helper to render the Gauge Chart inside Modal
+  const renderHealthGauge = (total: number, operative: number) => {
+    const score = total > 0 ? Math.round((operative / total) * 100) : 0;
+    
+    // Determine Fear/Greed Label and Color
+    let label = "";
+    let colorClass = "";
+    if (score <= 25) { label = "Muito Medo"; colorClass = "text-red-600"; }
+    else if (score <= 50) { label = "Medo"; colorClass = "text-yellow-600"; }
+    else if (score <= 75) { label = "Confiante"; colorClass = "text-lime-600"; }
+    else { label = "Muito Confiante"; colorClass = "text-green-700"; }
+
+    // Rotation calculation: 0% = -90deg, 100% = 90deg
+    const rotation = (score / 100) * 180 - 90;
+
+    return (
+        <div className="flex flex-col items-center justify-center bg-white rounded-xl border border-gray-200 shadow-sm p-4 h-full">
+            <h3 className="text-xs font-bold uppercase text-gray-500 mb-2">Índice de Operacionalidade</h3>
+            
+            {/* Gauge Container */}
+            <div className="relative w-48 h-24 overflow-hidden mb-2">
+                {/* Gauge Background (Conic Gradient) */}
+                <div 
+                    className="w-48 h-48 rounded-full box-border"
+                    style={{
+                        background: `conic-gradient(from 270deg at 50% 50%, 
+                            #EF4444 0deg 45deg, 
+                            #EAB308 45deg 90deg, 
+                            #84CC16 90deg 135deg, 
+                            #15803D 135deg 180deg, 
+                            transparent 180deg)`,
+                        transform: 'rotate(0deg)',
+                        mask: 'radial-gradient(transparent 55%, black 56%)',
+                        WebkitMask: 'radial-gradient(transparent 55%, black 56%)'
+                    }}
+                ></div>
+                
+                {/* Needle */}
+                <div 
+                    className="absolute bottom-0 left-1/2 w-1 h-[90%] bg-gray-800 origin-bottom rounded-full transition-transform duration-700 ease-out"
+                    style={{ 
+                        transform: `translateX(-50%) rotate(${rotation}deg)`,
+                        zIndex: 10 
+                    }}
+                >
+                    <div className="absolute -top-1 -left-1 w-3 h-3 bg-gray-800 rounded-full"></div>
+                </div>
+                
+                {/* Base Pivot */}
+                <div className="absolute bottom-[-5px] left-1/2 w-4 h-4 bg-gray-800 rounded-full transform -translate-x-1/2 z-20"></div>
+            </div>
+
+            {/* Score & Label */}
+            <div className="text-center -mt-2">
+                <div className="text-3xl font-bold text-gray-800">{score}%</div>
+                <div className={`text-sm font-bold uppercase ${colorClass}`}>{label}</div>
+            </div>
+            
+            <div className="flex justify-between w-full px-4 mt-2 text-[10px] text-gray-400 font-mono">
+                <span>0</span>
+                <span>100</span>
+            </div>
+        </div>
+    );
+  };
 
   return (
     <div className={`bg-white rounded-2xl shadow-xl p-6 w-full mx-auto border border-gray-100 transition-all duration-300 ${sheetData.length > 0 ? 'max-w-7xl' : 'max-w-3xl'}`}>
@@ -172,22 +410,57 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
         
         {/* Step 1: File Upload (Only visible if NO data) */}
         {sheetData.length === 0 && (
-            <div className="border-2 border-dashed border-blue-200 rounded-xl p-10 bg-blue-50 text-center hover:bg-blue-100 transition-colors cursor-pointer relative">
-            <input 
-                type="file" 
-                accept=".xlsx, .xls, .csv" 
-                onChange={handleFileChange}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            />
-            <div className="flex flex-col items-center">
-                <svg className="w-12 h-12 text-blue-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                </svg>
-                <span className="text-blue-700 font-medium text-lg">
-                Selecione sua lista de visitas (Excel/CSV)
-                </span>
-                <p className="text-sm text-blue-400 mt-1">Colunas sugeridas: Nome, Endereço, Setor, Horário, Obs</p>
-            </div>
+            <div className="space-y-6">
+                {/* ROTA UPLOAD */}
+                <div className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors cursor-pointer relative group ${isProcessingFile ? 'border-gray-300 bg-gray-50' : 'border-blue-200 bg-blue-50 hover:bg-blue-100'}`}>
+                    <input 
+                        ref={fileInputRef}
+                        type="file" 
+                        accept=".xlsx, .xls, .csv" 
+                        onChange={handleFileChange}
+                        onClick={handleInputClick}
+                        disabled={isProcessingFile}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                    />
+                    
+                    {isProcessingFile ? (
+                        <div className="flex flex-col items-center animate-pulse">
+                             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                             <span className="text-blue-800 font-bold text-lg">Processando Arquivo...</span>
+                             <p className="text-sm text-blue-500 mt-1">Lendo dados e colunas...</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-center">
+                            <div className="bg-white p-3 rounded-full mb-3 shadow-sm group-hover:scale-110 transition-transform">
+                                <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                            </div>
+                            <span className="text-blue-800 font-bold text-lg">
+                            Carregar Lista de Visitas (Rota)
+                            </span>
+                            <p className="text-sm text-blue-500 mt-1">Clique ou arraste seu arquivo Excel/CSV aqui</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* STATUS BARRA DE SAUDE */}
+                <div className={`p-4 rounded-lg flex items-center justify-between transition-colors ${healthBaseStatus.includes('⚠️') ? 'bg-yellow-50 text-yellow-800 border border-yellow-200' : (healthBaseStatus.includes('❌') ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-green-50 text-green-800 border border-green-200')}`}>
+                    <div className="flex items-center gap-3">
+                         <div className="p-2 bg-white rounded-full shadow-sm">
+                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                        <span className="font-medium text-sm">{healthBaseStatus}</span>
+                    </div>
+                </div>
+
+                 {/* Instructions Helper */}
+                 {healthBaseStatus.includes('⚠️') && (
+                     <div className="text-center bg-gray-50 p-4 rounded-lg border border-gray-200 text-xs text-gray-600">
+                        <p className="font-bold mb-1">Como usar dados reais?</p>
+                        1. Crie a pasta <code>public/assets</code> na raiz do projeto.<br/>
+                        2. Salve sua planilha de saúde lá com o nome <code>base_saude.xlsx</code>.<br/>
+                        3. Recarregue a página.
+                     </div>
+                 )}
             </div>
         )}
 
@@ -202,13 +475,20 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-col gap-2 flex-shrink-0">
                         <div className="flex justify-between items-center">
                             <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
-                            <button 
-                                type="button" 
-                                onClick={() => { setSheetData([]); setFileName(''); setSelectedIds([]); }}
-                                className="text-xs text-red-600 hover:text-red-800 font-medium"
-                            >
-                                Trocar Arquivo
-                            </button>
+                            <div className="flex gap-3 text-xs">
+                                 {(!healthMap || healthMap.size === 0) && (
+                                     <span className="text-orange-500 flex items-center" title="Dados de saúde das máquinas estão sendo simulados.">
+                                         ⚠️ Dados POS Simulados
+                                     </span>
+                                 )}
+                                 <button 
+                                    type="button" 
+                                    onClick={() => { setSheetData([]); setFileName(''); setSelectedIds([]); }}
+                                    className="text-red-600 hover:text-red-800 font-medium"
+                                >
+                                    Reiniciar
+                                </button>
+                            </div>
                         </div>
                         
                         {/* Bulk Action Bar */}
@@ -241,57 +521,80 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             onChange={toggleSelectAll}
                                         />
                                     </th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa / Setor</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa / Maquininhas</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detalhes (Horário)</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                                {sheetData.map((row) => (
-                                    <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
-                                        <td className="px-4 py-3">
-                                            <input 
-                                                type="checkbox" 
-                                                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-                                                checked={selectedIds.includes(row.id)}
-                                                onChange={() => toggleSelectRow(row.id)}
-                                            />
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap">
-                                            <div className="font-medium text-gray-900">{row.Nome}</div>
-                                            <div className="text-xs text-gray-500">{row.Setor || 'Setor n/a'}</div>
-                                            {row.priority !== 'normal' && (
-                                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mt-1 ${getPriorityLabel(row.priority).class}`}>
-                                                    {getPriorityLabel(row.priority).text}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={row.Endereco}>
-                                            <div className="flex items-center gap-2">
-                                                <span className="truncate">{row.Endereco}</span>
-                                                <button 
-                                                    type="button"
-                                                    onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
-                                                    className="text-gray-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
-                                                    title="Editar informações de estacionamento"
-                                                >
-                                                    🅿️
-                                                </button>
-                                            </div>
-                                            {row.customParkingInfo && (
-                                                <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
-                                                    {row.customParkingInfo}
+                                {sheetData.map((row) => {
+                                    const hasPos = row.posData && row.posData.length > 0;
+                                    return (
+                                        <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
+                                            <td className="px-4 py-3">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                                                    checked={selectedIds.includes(row.id)}
+                                                    onChange={() => toggleSelectRow(row.id)}
+                                                />
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                {hasPos ? (
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => openPosModal(row)}
+                                                        className="font-medium text-blue-600 hover:text-blue-800 hover:underline text-left"
+                                                    >
+                                                        {row.Nome}
+                                                    </button>
+                                                ) : (
+                                                    <span className="font-medium text-gray-800 text-left cursor-default">
+                                                        {row.Nome}
+                                                    </span>
+                                                )}
+                                                
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <span className={`text-xs px-2 py-0.5 rounded-full border ${hasPos ? 'bg-gray-100 text-gray-600 border-gray-200' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                                                        {hasPos ? row.posData!.length : 0} POS
+                                                    </span>
+                                                    {hasPos && row.posData!.some(p => getHealthStatus(p).label === 'CRÍTICO') && (
+                                                        <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">! Crítico</span>
+                                                    )}
                                                 </div>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                            <div className="flex flex-col">
-                                                <span>Abre: {row.HorarioAbertura || '-'}</span>
-                                                <span>Fecha: {row.HorarioFechamento || '-'}</span>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
+                                                {row.priority !== 'normal' && (
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mt-1 ${getPriorityLabel(row.priority).class}`}>
+                                                        {getPriorityLabel(row.priority).text}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={row.Endereco}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="truncate">{row.Endereco}</span>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
+                                                        className="text-gray-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
+                                                        title="Editar informações de estacionamento"
+                                                    >
+                                                        🅿️
+                                                    </button>
+                                                </div>
+                                                {row.customParkingInfo && (
+                                                    <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
+                                                        {row.customParkingInfo}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                                <div className="flex flex-col">
+                                                    <span>Abre: {row.HorarioAbertura || '-'}</span>
+                                                    <span>Fecha: {row.HorarioFechamento || '-'}</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -525,7 +828,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     <button 
                         type="submit" 
                         disabled={isLoading}
-                        className={`w-full py-3 rounded-xl font-bold text-white shadow-lg transition-all transform hover:scale-[1.01] ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'}`}
+                        className={`w-full py-3 rounded-xl font-bold text-white shadow-lg transition-all transform hover:scale-[1.01] ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#3483fa] hover:bg-blue-600'}`}
                     >
                         Gerar Roteiro
                     </button>
@@ -535,13 +838,89 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
         )}
 
         {error && (
-            <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm flex items-center justify-center animate-pulse">
+            <div className="p-4 bg-red-100 text-red-700 rounded-xl text-sm flex items-center justify-center animate-pulse border border-red-200 shadow-sm mt-4 font-semibold">
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                 {error}
             </div>
         )}
 
-        {/* Delete Confirmation Modal (Handles Both Single and Bulk) */}
+        {/* --- IMPORT FILTER MODAL --- */}
+        {showFilterModal && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-opacity">
+                <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 transform transition-all scale-100 flex flex-col max-h-[90vh]">
+                    <div className="text-center mb-6">
+                        <h3 className="text-2xl font-bold text-gray-900">Importar Estabelecimentos</h3>
+                        <p className="text-gray-500 text-sm mt-1">Selecione como deseja processar os dados do arquivo.</p>
+                    </div>
+
+                    <div className="flex gap-4 mb-6">
+                        <button
+                            type="button"
+                            onClick={() => setImportMode('all')}
+                            className={`flex-1 p-4 rounded-xl border-2 transition-all ${importMode === 'all' ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+                        >
+                            <div className="font-bold text-lg mb-1">Importar Tudo</div>
+                            <div className="text-xs opacity-80">Processar {tempSheetData.length} endereços sem filtrar</div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setImportMode('filter'); if(selectedSectors.length === 0) setSelectedSectors(BUSINESS_SECTORS); }}
+                            className={`flex-1 p-4 rounded-xl border-2 transition-all ${importMode === 'filter' ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-sm' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+                        >
+                            <div className="font-bold text-lg mb-1">Filtrar por Setor</div>
+                            <div className="text-xs opacity-80">Selecionar categorias específicas</div>
+                        </button>
+                    </div>
+
+                    {importMode === 'filter' && (
+                        <div className="flex-1 overflow-y-auto mb-6 custom-scrollbar pr-2">
+                             <div className="flex justify-between items-center mb-3">
+                                 <h4 className="font-semibold text-gray-700 text-sm">Selecione os setores desejados:</h4>
+                                 <button type="button" onClick={toggleAllSectors} className="text-xs text-blue-600 font-medium hover:underline">
+                                     {selectedSectors.length === BUSINESS_SECTORS.length ? 'Desmarcar Todos' : 'Marcar Todos'}
+                                 </button>
+                             </div>
+                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                 {BUSINESS_SECTORS.map((sector) => (
+                                     <label 
+                                         key={sector} 
+                                         className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors ${selectedSectors.includes(sector) ? 'bg-indigo-50 border-indigo-200' : 'border-gray-200 hover:bg-gray-50'}`}
+                                     >
+                                         <input 
+                                             type="checkbox" 
+                                             checked={selectedSectors.includes(sector)}
+                                             onChange={() => toggleSector(sector)}
+                                             className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 mr-3"
+                                         />
+                                         <span className="text-sm font-medium text-gray-700">{sector}</span>
+                                     </label>
+                                 ))}
+                             </div>
+                        </div>
+                    )}
+
+                    <div className="flex justify-end gap-3 mt-auto pt-4 border-t border-gray-100">
+                         <button
+                            type="button"
+                            onClick={() => { setShowFilterModal(false); setTempSheetData([]); setFileName(''); }}
+                            className="px-6 py-2 bg-transparent text-[#3483fa] border border-[#3483fa] rounded-lg font-bold hover:bg-blue-50 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleConfirmImport}
+                            className="px-6 py-2 bg-[#3483fa] text-white rounded-lg font-bold hover:shadow-lg transition-all hover:bg-blue-600"
+                        >
+                            Confirmar Importação
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        
+        {/* ... Rest of modals (delete, pos, parking) ... */}
+        {/* Delete Confirmation Modal */}
         {(itemToDelete || isBulkDelete) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 transform transition-all scale-100 animate-fade-in-up">
@@ -553,25 +932,23 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     </h3>
                     <p className="text-gray-500 text-center text-sm mb-6">
                         {isBulkDelete 
-                            ? `Tem certeza que deseja remover ${selectedIds.length} visita(s) selecionada(s)?`
-                            : <span>Tem certeza que deseja remover <span className="font-semibold text-gray-700">{itemToDeleteName}</span> da sua lista?</span>
-                        }
-                        <br/>Esta ação não pode ser desfeita.
+                            ? `Tem certeza que deseja remover ${selectedIds.length} estabelecimentos? Esta ação não pode ser desfeita.` 
+                            : `Tem certeza que deseja remover "${itemToDeleteName}"?`}
                     </p>
                     <div className="flex gap-3">
-                        <button
-                            type="button"
+                        <button 
+                            type="button" 
                             onClick={() => { setItemToDelete(null); setIsBulkDelete(false); }}
-                            className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
+                            className="flex-1 py-2 bg-transparent text-[#3483fa] border border-[#3483fa] rounded-lg font-bold hover:bg-blue-50 transition-colors"
                         >
                             Cancelar
                         </button>
-                        <button
-                            type="button"
+                        <button 
+                            type="button" 
                             onClick={isBulkDelete ? confirmBulkDelete : confirmDelete}
-                            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
+                            className="flex-1 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 transition-colors shadow-md"
                         >
-                            Confirmar
+                            Remover
                         </button>
                     </div>
                 </div>
@@ -580,37 +957,175 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
 
         {/* Parking Info Modal */}
         {parkingModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 transform transition-all scale-100 animate-fade-in-up">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full bg-indigo-100 mx-auto mb-4">
-                        <span className="text-2xl">🅿️</span>
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="bg-indigo-100 p-2 rounded-full text-indigo-700">
+                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                        <h3 className="text-lg font-bold text-gray-900">Info. de Estacionamento</h3>
                     </div>
-                    <h3 className="text-lg font-bold text-center text-gray-900 mb-2">Informação de Estacionamento</h3>
-                    <p className="text-gray-500 text-center text-sm mb-4">
-                        Adicione detalhes específicos para este local (ex: "Entrada pela lateral", "Vagas limitadas", "Conveniado").
+                    <p className="text-gray-500 text-sm mb-4">
+                        Adicione detalhes específicos para este local (ex: "Entrada pela lateral", "Conveniado com ParkZap").
                     </p>
-                    
                     <textarea 
                         value={parkingText}
                         onChange={(e) => setParkingText(e.target.value)}
-                        placeholder="Digite os detalhes do estacionamento..."
-                        className="w-full h-24 p-3 border border-gray-600 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm mb-6 resize-none placeholder-gray-400"
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[100px] text-sm"
+                        placeholder="Digite as informações aqui..."
                     ></textarea>
-
-                    <div className="flex gap-3">
-                        <button
-                            type="button"
-                            onClick={() => { setParkingModalOpen(false); setCurrentParkingId(null); setParkingText(''); }}
-                            className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
+                     <div className="flex justify-end gap-3 mt-4">
+                        <button 
+                            type="button" 
+                            onClick={() => { setParkingModalOpen(false); setCurrentParkingId(null); }}
+                            className="px-4 py-2 bg-transparent text-[#3483fa] border border-[#3483fa] rounded-lg font-bold hover:bg-blue-50 transition-colors"
                         >
                             Cancelar
                         </button>
-                        <button
-                            type="button"
+                        <button 
+                            type="button" 
                             onClick={saveParkingInfo}
-                            className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+                            className="px-4 py-2 bg-[#3483fa] text-white rounded-lg font-bold hover:bg-blue-600 transition-colors shadow-sm"
                         >
                             Salvar
+                        </button>
+                    </div>
+                </div>
+             </div>
+        )}
+
+        {/* POS Health Dashboard Modal */}
+        {posModalOpen && selectedPosData && (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md transition-opacity">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full overflow-hidden transform transition-all scale-100 animate-fade-in-up flex flex-col max-h-[90vh]">
+                    {/* Header */}
+                    <div className="bg-[#3483fa] px-6 py-5 flex justify-between items-start flex-shrink-0">
+                        <div>
+                            <h2 className="text-xl font-bold text-white mb-1">Painel de Saúde POS</h2>
+                            <p className="text-blue-100 text-sm flex items-center">
+                                <span className="mr-2">Cliente:</span> 
+                                <span className="text-white font-semibold">{selectedPosData.name}</span>
+                                <span className="mx-2 text-blue-200">|</span>
+                                <span className="text-blue-100">{selectedPosData.data.length} Maquininhas</span>
+                            </p>
+                        </div>
+                        <button onClick={() => setPosModalOpen(false)} className="text-white/80 hover:text-white transition-colors">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+
+                    <div className="p-6 bg-gray-50 overflow-y-auto custom-scrollbar">
+                        {/* Summary Bar with Gauge - UPDATED LAYOUT */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            
+                            {/* NEW: FEAR AND GREED GAUGE */}
+                            <div className="h-full">
+                                {renderHealthGauge(
+                                    selectedPosData.data.length,
+                                    selectedPosData.data.filter(d => getHealthStatus(d).label === 'OPERATIVO').length
+                                )}
+                            </div>
+
+                            {/* Stats Grid */}
+                            <div className="grid grid-cols-2 gap-4 h-full">
+                                <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex flex-col justify-center">
+                                    <span className="block text-xs text-gray-500 uppercase font-bold mb-1">Total de Equipamentos</span>
+                                    <span className="text-3xl font-bold text-gray-800">{selectedPosData.data.length}</span>
+                                </div>
+                                <div className="bg-green-50 p-3 rounded-lg border border-green-100 shadow-sm flex flex-col justify-center">
+                                    <span className="block text-xs text-green-600 uppercase font-bold mb-1">Operativos (Saudáveis)</span>
+                                    <span className="text-3xl font-bold text-green-700">
+                                        {selectedPosData.data.filter(d => getHealthStatus(d).label === 'OPERATIVO').length}
+                                    </span>
+                                </div>
+                                <div className="bg-red-50 p-3 rounded-lg border border-red-100 shadow-sm flex flex-col justify-center">
+                                    <span className="block text-xs text-red-500 uppercase font-bold mb-1">Críticos (Erro Alto)</span>
+                                    <span className="text-3xl font-bold text-red-700">
+                                        {selectedPosData.data.filter(d => getHealthStatus(d).label === 'CRÍTICO').length}
+                                    </span>
+                                </div>
+                                <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-100 shadow-sm flex flex-col justify-center">
+                                    <span className="block text-xs text-yellow-600 uppercase font-bold mb-1">Atenção (Sinal/Bobina)</span>
+                                    <span className="text-3xl font-bold text-yellow-700">
+                                        {selectedPosData.data.filter(d => ['ATENÇÃO', 'COMPROMETIDO'].includes(getHealthStatus(d).label)).length}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Machine List Grid */}
+                        <h4 className="text-sm font-bold text-gray-700 mb-3 uppercase tracking-wide">Detalhamento por Equipamento</h4>
+                        <div className="grid grid-cols-1 gap-6">
+                            {selectedPosData.data.map((machine, idx) => {
+                                const status = getHealthStatus(machine);
+                                return (
+                                    <div key={idx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                        {/* Card Header with Status */}
+                                        <div className={`px-4 py-3 border-b flex justify-between items-center ${status.label === 'CRÍTICO' ? 'bg-red-50 border-red-100' : (status.label === 'COMPROMETIDO' ? 'bg-orange-50 border-orange-100' : 'bg-gray-50 border-gray-100')}`}>
+                                            <div className="flex items-center gap-3">
+                                                 <div className={`w-3 h-3 rounded-full ${status.label === 'CRÍTICO' ? 'bg-red-500' : (status.label === 'OPERATIVO' ? 'bg-green-500' : 'bg-yellow-500')}`}></div>
+                                                 <span className="font-mono text-sm font-bold text-gray-700">{machine.machineId}</span>
+                                                 <span className="text-xs text-gray-500 bg-white px-2 py-0.5 rounded border">{machine.model}</span>
+                                            </div>
+                                            <span className={`text-xs font-bold px-2 py-1 rounded ${status.color} border ${status.border}`}>
+                                                {status.label}
+                                            </span>
+                                        </div>
+
+                                        {/* Card Body Metrics */}
+                                        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                            <div>
+                                                <span className="text-xs text-gray-500 block mb-1">Wifi / Sinal</span>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-16 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                                                        <div className={`h-full ${machine.signalStrength < 30 ? 'bg-red-500' : 'bg-green-500'}`} style={{width: `${machine.signalStrength}%`}}></div>
+                                                    </div>
+                                                    <span className="text-sm font-bold">{machine.signalStrength}%</span>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span className="text-xs text-gray-500 block mb-1">Bateria</span>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-16 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                                                        <div className={`h-full ${machine.batteryLevel < 20 ? 'bg-red-500' : 'bg-blue-500'}`} style={{width: `${machine.batteryLevel}%`}}></div>
+                                                    </div>
+                                                    <span className="text-sm font-bold">{machine.batteryLevel}%</span>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <span className="text-xs text-gray-500 block mb-1">Taxa de Erro</span>
+                                                <span className={`text-sm font-bold ${machine.errorRate >= 6 ? 'text-red-600' : 'text-gray-800'}`}>
+                                                    {machine.errorRate}%
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <span className="text-xs text-gray-500 block mb-1">Bobina</span>
+                                                <span className={`text-sm font-bold ${machine.paperStatus === 'Vazio' ? 'text-red-600' : 'text-gray-800'}`}>
+                                                    {machine.paperStatus}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        {/* Footer / Analysis */}
+                                        <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
+                                             <div className="text-xs text-gray-500">
+                                                 Firmware: <span className="font-mono">{machine.firmwareVersion}</span> | Incidents: {machine.incidents || 0}
+                                             </div>
+                                             <div className="text-xs font-medium text-indigo-600 max-w-[50%] text-right truncate">
+                                                 {getHealthAnalysis(machine)}
+                                             </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div className="bg-gray-100 px-6 py-4 flex justify-end flex-shrink-0">
+                        <button 
+                            onClick={() => setPosModalOpen(false)}
+                            className="bg-transparent border border-[#3483fa] text-[#3483fa] font-bold py-2 px-6 rounded-lg hover:bg-blue-50 transition-colors shadow-sm"
+                        >
+                            Fechar
                         </button>
                     </div>
                 </div>

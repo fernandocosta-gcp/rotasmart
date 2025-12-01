@@ -9,6 +9,21 @@ export enum EstablishmentType {
 
 export type PriorityLevel = 'normal' | 'high' | 'lunch' | 'end_of_day';
 
+export interface POSHealthData {
+  machineId: string; // Id Máquina
+  model: string; // Modelo (Point Smart 2 / Point Mini)
+  signalStrength: number; // Sinal Wifi (%)
+  batteryLevel: number; // Bateria (%)
+  errorRate: number; // Taxa De Erros (%)
+  connectivity: string; // Derivado ou fixo
+  lastTransaction: string; // (Mantido para compatibilidade ou mock)
+  paperStatus: 'OK' | 'Pouco' | 'Vazio'; // Bobina
+  firmwareVersion: string; // Firmware
+  lastUpdate?: string; // Ultima Atualização
+  incidents?: number; // Incidentes Abertos
+  avgUptime?: number; // Tempo Médio Ligado
+}
+
 export interface RawSheetRow {
   id: string;
   Nome: string;
@@ -18,7 +33,8 @@ export interface RawSheetRow {
   HorarioAbertura?: string;
   HorarioFechamento?: string;
   priority: PriorityLevel;
-  customParkingInfo?: string; // New field for specific parking details
+  customParkingInfo?: string; 
+  posData?: POSHealthData[]; // Changed from single object to Array
   [key: string]: any;
 }
 
@@ -36,12 +52,12 @@ export interface UserPreferences {
   visitDurationMinutes: number;
   startLocation: string;
   useCurrentLocation: boolean;
-  returnToStart: boolean; // If true, endLocation is ignored (loop)
-  endLocation: string;    // Used if returnToStart is false
+  returnToStart: boolean; 
+  endLocation: string;    
   needsFuel: boolean;
   officeSettings: OfficeSettings;
   needsLunch: boolean;
-  lunchDurationMinutes: number; // Duration of lunch break
+  lunchDurationMinutes: number; 
   parkingPreference: 'street' | 'paid' | 'blue_zone';
 }
 
@@ -56,13 +72,19 @@ export interface RouteStop {
     lng: number;
   };
   estimatedArrival: string;
-  durationMinutes: number; // Travel + Visit time
+  durationMinutes: number; 
   notes: string;
   risks: {
     flood: boolean;
     towing: boolean;
-    security: boolean; // New field regarding crime/safety
+    security: boolean; 
     description?: string;
+  };
+  weather?: {
+    temp: string; 
+    condition: string; 
+    chanceOfRain: string; 
+    isStormy: boolean; 
   };
   parkingSuggestion?: string;
   phoneNumber?: string;
@@ -70,11 +92,13 @@ export interface RouteStop {
 }
 
 export interface DailyItinerary {
-  dayLabel: string; // "Dia 1 - 25/10"
+  dayLabel: string; 
   date: string;
   summary: string;
   totalDistanceKm: string;
   totalTimeHours: string;
+  estimatedFuelCost: string; 
+  estimatedParkingCost: string; 
   stops: RouteStop[];
 }
 
