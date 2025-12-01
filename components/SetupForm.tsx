@@ -25,15 +25,19 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
         durationMinutes: 30
     },
     needsLunch: true,
+    lunchDurationMinutes: 60,
     parkingPreference: 'paid'
   });
   const [sheetData, setSheetData] = useState<RawSheetRow[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [error, setError] = useState<string>('');
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   
+  // State for bulk selection
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
   // State for delete confirmation modal
-  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null); // For single delete (kept for safety/logic reuse)
+  const [isBulkDelete, setIsBulkDelete] = useState(false); // Flag for bulk delete
 
   // State for Parking Info Modal
   const [parkingModalOpen, setParkingModalOpen] = useState(false);
@@ -49,6 +53,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
         if (data.length === 0) throw new Error("Arquivo vazio ou formato inválido");
         setSheetData(data);
         setError('');
+        setSelectedIds([]);
       } catch (err) {
         console.error(err);
         setError('Erro ao ler o arquivo. Use um .xlsx ou .csv válido.');
@@ -57,10 +62,42 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     }
   };
 
-  const updatePriority = (id: string, priority: PriorityLevel) => {
-    setSheetData(prev => prev.map(row => row.id === id ? { ...row, priority } : row));
-    setActiveMenuId(null);
+  // --- Bulk Actions Logic ---
+
+  const toggleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.checked) {
+          setSelectedIds(sheetData.map(row => row.id));
+      } else {
+          setSelectedIds([]);
+      }
   };
+
+  const toggleSelectRow = (id: string) => {
+      setSelectedIds(prev => 
+          prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+      );
+  };
+
+  const bulkUpdatePriority = (priority: PriorityLevel) => {
+      setSheetData(prev => prev.map(row => 
+          selectedIds.includes(row.id) ? { ...row, priority } : row
+      ));
+      // Optional: Clear selection after action? Let's keep it for now in case they want to do more.
+      // setSelectedIds([]); 
+  };
+
+  const promptBulkDelete = () => {
+      setIsBulkDelete(true);
+      // We borrow the itemToDelete modal logic roughly, but use a specific flag
+  };
+
+  const confirmBulkDelete = () => {
+      setSheetData(prev => prev.filter(row => !selectedIds.includes(row.id)));
+      setSelectedIds([]);
+      setIsBulkDelete(false);
+  };
+
+  // --- End Bulk Actions Logic ---
 
   // Parking Info Handlers
   const openParkingModal = (id: string) => {
@@ -69,7 +106,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
           setCurrentParkingId(id);
           setParkingText(row.customParkingInfo || '');
           setParkingModalOpen(true);
-          setActiveMenuId(null);
       }
   };
 
@@ -84,15 +120,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       }
   };
 
-  const promptDelete = (id: string) => {
-    setItemToDelete(id);
-    setActiveMenuId(null);
-  };
-
   const confirmDelete = () => {
     if (itemToDelete) {
       setSheetData(prev => prev.filter(row => row.id !== itemToDelete));
       setItemToDelete(null);
+      // Also remove from selected if present
+      setSelectedIds(prev => prev.filter(id => id !== itemToDelete));
     }
   };
 
@@ -163,31 +196,67 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             <div className="flex flex-col lg:flex-row gap-6 items-start">
                 
                 {/* Left Column: Preview Table */}
-                <div className="flex-1 w-full min-w-0 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col h-full self-stretch">
-                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
-                        <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
-                        <button 
-                            type="button" 
-                            onClick={() => { setSheetData([]); setFileName(''); }}
-                            className="text-xs text-red-600 hover:text-red-800 font-medium"
-                        >
-                            Trocar Arquivo
-                        </button>
+                <div className="flex-1 w-full min-w-0 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col h-full self-stretch relative">
+                    
+                    {/* Header with Bulk Actions */}
+                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-col gap-2 flex-shrink-0">
+                        <div className="flex justify-between items-center">
+                            <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
+                            <button 
+                                type="button" 
+                                onClick={() => { setSheetData([]); setFileName(''); setSelectedIds([]); }}
+                                className="text-xs text-red-600 hover:text-red-800 font-medium"
+                            >
+                                Trocar Arquivo
+                            </button>
+                        </div>
+                        
+                        {/* Bulk Action Bar */}
+                        {selectedIds.length > 0 && (
+                            <div className="flex items-center justify-between bg-blue-50 p-2 rounded-lg border border-blue-100 animate-fade-in-up">
+                                <span className="text-xs font-bold text-blue-800 ml-1">
+                                    {selectedIds.length} selecionados
+                                </span>
+                                <div className="flex gap-1 overflow-x-auto">
+                                    <button type="button" onClick={() => bulkUpdatePriority('high')} className="px-2 py-1 text-xs bg-white border border-red-200 text-red-700 rounded hover:bg-red-50 flex items-center" title="Definir Alta Prioridade">🔥 Alta</button>
+                                    <button type="button" onClick={() => bulkUpdatePriority('lunch')} className="px-2 py-1 text-xs bg-white border border-orange-200 text-orange-700 rounded hover:bg-orange-50 flex items-center" title="Definir para Almoço">🍽️ Almoço</button>
+                                    <button type="button" onClick={() => bulkUpdatePriority('end_of_day')} className="px-2 py-1 text-xs bg-white border border-purple-200 text-purple-700 rounded hover:bg-purple-50 flex items-center" title="Definir Fim do Dia">🌙 Fim</button>
+                                    <button type="button" onClick={() => bulkUpdatePriority('normal')} className="px-2 py-1 text-xs bg-white border border-gray-200 text-gray-600 rounded hover:bg-gray-50 flex items-center" title="Remover Prioridade">↺ Normal</button>
+                                    <div className="w-px h-4 bg-gray-300 mx-1 self-center"></div>
+                                    <button type="button" onClick={promptBulkDelete} className="px-2 py-1 text-xs bg-white border border-red-200 text-red-600 rounded hover:bg-red-50 flex items-center font-bold">🗑️</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                     
                     <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-grow" style={{ maxHeight: '700px' }}>
                         <table className="min-w-full divide-y divide-gray-200 relative pb-24">
-                            <thead className="bg-gray-50 sticky top-0 z-10">
+                            <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                                 <tr>
+                                    <th className="px-4 py-3 w-10">
+                                        <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                                            checked={sheetData.length > 0 && selectedIds.length === sheetData.length}
+                                            onChange={toggleSelectAll}
+                                        />
+                                    </th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa / Setor</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detalhes (Horário)</th>
-                                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {sheetData.map((row) => (
-                                    <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                                    <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
+                                        <td className="px-4 py-3">
+                                            <input 
+                                                type="checkbox" 
+                                                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                                                checked={selectedIds.includes(row.id)}
+                                                onChange={() => toggleSelectRow(row.id)}
+                                            />
+                                        </td>
                                         <td className="px-4 py-3 whitespace-nowrap">
                                             <div className="font-medium text-gray-900">{row.Nome}</div>
                                             <div className="text-xs text-gray-500">{row.Setor || 'Setor n/a'}</div>
@@ -198,10 +267,19 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={row.Endereco}>
-                                            <div>{row.Endereco}</div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="truncate">{row.Endereco}</span>
+                                                <button 
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
+                                                    className="text-gray-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
+                                                    title="Editar informações de estacionamento"
+                                                >
+                                                    🅿️
+                                                </button>
+                                            </div>
                                             {row.customParkingInfo && (
                                                 <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
-                                                    <span className="mr-1">🅿️</span>
                                                     {row.customParkingInfo}
                                                 </div>
                                             )}
@@ -211,74 +289,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                 <span>Abre: {row.HorarioAbertura || '-'}</span>
                                                 <span>Fecha: {row.HorarioFechamento || '-'}</span>
                                             </div>
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium relative">
-                                            <button
-                                                type="button"
-                                                onClick={() => setActiveMenuId(activeMenuId === row.id ? null : row.id)}
-                                                className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"
-                                            >
-                                                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" /></svg>
-                                            </button>
-                                            
-                                            {/* Action Menu Dropdown */}
-                                            {activeMenuId === row.id && (
-                                                <>
-                                                <div 
-                                                    className="fixed inset-0 z-10 cursor-default" 
-                                                    onClick={() => setActiveMenuId(null)}
-                                                ></div>
-                                                <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-20 border border-gray-100 py-1">
-                                                    <div className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Ações</div>
-                                                    
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => openParkingModal(row.id)}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50"
-                                                    >
-                                                        🅿️ Info Estacionamento
-                                                    </button>
-
-                                                    <div className="border-t border-gray-100 my-1"></div>
-                                                    
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => updatePriority(row.id, 'high')}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                                    >
-                                                        🔥 Prioridade Alta
-                                                    </button>
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => updatePriority(row.id, 'lunch')}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                                    >
-                                                        🍽️ Próximo ao Almoço
-                                                    </button>
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => updatePriority(row.id, 'end_of_day')}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                                                    >
-                                                        🌙 Fim do Dia
-                                                    </button>
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => updatePriority(row.id, 'normal')}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 border-b border-gray-100"
-                                                    >
-                                                        ↺ Normal
-                                                    </button>
-                                                    <button 
-                                                        type="button"
-                                                        onClick={() => promptDelete(row.id)}
-                                                        className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
-                                                    >
-                                                        🗑️ Remover da Lista
-                                                    </button>
-                                                </div>
-                                                </>
-                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -451,10 +461,34 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     )}
                                 </div>
 
-                                <label className="flex items-center space-x-2 cursor-pointer p-1 rounded hover:bg-gray-50">
-                                    <input type="checkbox" checked={prefs.needsLunch} onChange={(e) => setPrefs({...prefs, needsLunch: e.target.checked})} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"/>
-                                    <span className="text-gray-700 text-sm">Almoço (1h)</span>
-                                </label>
+                                {/* Lunch Settings */}
+                                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                                    <label className="flex items-center space-x-2 cursor-pointer mb-2">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={prefs.needsLunch} 
+                                            onChange={(e) => setPrefs({...prefs, needsLunch: e.target.checked})} 
+                                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                                        />
+                                        <span className="text-gray-700 text-sm font-medium">Parada de Almoço</span>
+                                    </label>
+                                    
+                                    {prefs.needsLunch && (
+                                        <div className="pl-6 animate-fade-in-up">
+                                            <div>
+                                                <label className="block text-xs text-gray-500 mb-1">Duração (min)</label>
+                                                <input 
+                                                    type="number"
+                                                    min="15"
+                                                    max="120"
+                                                    value={prefs.lunchDurationMinutes}
+                                                    onChange={(e) => setPrefs({...prefs, lunchDurationMinutes: parseInt(e.target.value) || 0})}
+                                                    className="w-full text-xs p-1.5 border border-gray-600 rounded bg-gray-700 text-white outline-none"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                         <div className="border-t pt-2">
@@ -493,12 +527,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                         disabled={isLoading}
                         className={`w-full py-3 rounded-xl font-bold text-white shadow-lg transition-all transform hover:scale-[1.01] ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'}`}
                     >
-                        {isLoading ? (
-                            <span className="flex items-center justify-center">
-                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                Otimizando...
-                            </span>
-                        ) : 'Gerar Roteiro'}
+                        Gerar Roteiro
                     </button>
                 </div>
 
@@ -512,28 +541,34 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* Delete Confirmation Modal */}
-        {itemToDelete && (
+        {/* Delete Confirmation Modal (Handles Both Single and Bulk) */}
+        {(itemToDelete || isBulkDelete) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 transform transition-all scale-100 animate-fade-in-up">
                     <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
                         <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                     </div>
-                    <h3 className="text-lg font-bold text-center text-gray-900 mb-2">Remover Visita?</h3>
+                    <h3 className="text-lg font-bold text-center text-gray-900 mb-2">
+                        {isBulkDelete ? 'Remover Múltiplas Visitas?' : 'Remover Visita?'}
+                    </h3>
                     <p className="text-gray-500 text-center text-sm mb-6">
-                        Tem certeza que deseja remover <span className="font-semibold text-gray-700">{itemToDeleteName}</span> da sua lista? Esta ação não pode ser desfeita.
+                        {isBulkDelete 
+                            ? `Tem certeza que deseja remover ${selectedIds.length} visita(s) selecionada(s)?`
+                            : <span>Tem certeza que deseja remover <span className="font-semibold text-gray-700">{itemToDeleteName}</span> da sua lista?</span>
+                        }
+                        <br/>Esta ação não pode ser desfeita.
                     </p>
                     <div className="flex gap-3">
                         <button
                             type="button"
-                            onClick={() => setItemToDelete(null)}
+                            onClick={() => { setItemToDelete(null); setIsBulkDelete(false); }}
                             className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors"
                         >
                             Cancelar
                         </button>
                         <button
                             type="button"
-                            onClick={confirmDelete}
+                            onClick={isBulkDelete ? confirmBulkDelete : confirmDelete}
                             className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors shadow-lg shadow-red-200"
                         >
                             Confirmar

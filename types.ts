@@ -41,6 +41,7 @@ export interface UserPreferences {
   needsFuel: boolean;
   officeSettings: OfficeSettings;
   needsLunch: boolean;
+  lunchDurationMinutes: number; // Duration of lunch break
   parkingPreference: 'street' | 'paid' | 'blue_zone';
 }
 
@@ -60,6 +61,7 @@ export interface RouteStop {
   risks: {
     flood: boolean;
     towing: boolean;
+    security: boolean; // New field regarding crime/safety
     description?: string;
   };
   parkingSuggestion?: string;

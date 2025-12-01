@@ -57,67 +57,76 @@ export const generateRoutePlan = async (
   }
 
   const prompt = `
-    Atue como um Solver de Roteirização Avançado (Vehicle Routing Problem - VRP).
+    Atue como um Solver de Roteirização Avançado (VRP) E um Especialista em Segurança Logística Urbana.
     
-    OBJETIVO: Criar um cronograma de visitas otimizado, DIVIDIDO EM MÚLTIPLOS DIAS se necessário, minimizando a distância total e o tempo de deslocamento.
-    
-    ESTRATÉGIA ALGORÍTMICA APLICADA:
-    Utilize uma abordagem híbrida simulando as seguintes heurísticas:
-    1. **Clustering (Agrupamento Geográfico):** Agrupe as visitas que estão geograficamente próximas (bairros/regiões vizinhas) no mesmo dia para evitar deslocamentos longos desnecessários.
-    2. **Nearest Neighbor (Vizinho Mais Próximo):** A partir do ponto atual, selecione o próximo ponto mais próximo que atenda às restrições de tempo, criando uma cadeia lógica.
-    3. **Sweep Algorithm (Varredura):** Organize as paradas em um fluxo direcional lógico (ex: sentido horário ou linear) para evitar cruzamentos de rota (ziguezague) e retornos (backtracking).
+    OBJETIVO: Criar um cronograma de visitas otimizado, minimizando tempo/distância e MAXIMIZANDO A SEGURANÇA.
     
     DADOS DO PLANEJAMENTO:
-    - Data de Início: ${preferences.departureDate}
-    - Horário de Saída Diária: ${preferences.departureTime}
-    - Horário MÁXIMO de Retorno (Fim da jornada): ${preferences.returnTime}
-    - Duração Fixa por Visita (Cliente): ${preferences.visitDurationMinutes} minutos
-    - Local de Partida (Início): ${startLocationStr}
-    - Local de Chegada (Fim): ${endLocationStr}
+    - Início: ${preferences.departureDate} às ${preferences.departureTime}
+    - Fim Máximo: ${preferences.returnTime}
+    - Duração Visita: ${preferences.visitDurationMinutes} min
+    - Partida: ${startLocationStr}
+    - Chegada: ${endLocationStr}
     
-    PARADAS OBRIGATÓRIAS E REGRAS ESPECIAIS:
-    - Abastecer? ${preferences.needsFuel ? 'SIM' : 'NÃO'}
-    - Almoço? ${preferences.needsLunch ? 'SIM (1 hora - Janela 11:30 a 13:30)' : 'NÃO'}
-    - Preferência de Estacionamento: ${preferences.parkingPreference === 'blue_zone' ? 'Zona Azul' : preferences.parkingPreference === 'paid' ? 'Estacionamento Pago' : 'Rua/Livre'}
-    
-    --- CONFIGURAÇÃO DO ESCRITÓRIO ---
-    - Passar no escritório? ${officeInstruction}
-    ----------------------------------
+    PARADAS ESPECIAIS:
+    - Almoço: ${preferences.needsLunch ? `SIM (${preferences.lunchDurationMinutes} min)` : 'NÃO'}
+    - Escritório: ${officeInstruction}
+    - Estacionamento Preferido: ${preferences.parkingPreference}
 
-    LISTA DE CLIENTES E PRIORIDADES (Input Nodes):
+    LISTA DE CLIENTES:
     ${stopsList}
 
-    REGRAS DE RESTRIÇÃO (Hard Constraints):
-    1. **Prioridades**: Respeite RIGOROSAMENTE as marcações [PRIORIDADE ALTA], [VISITA DE ALMOÇO] e [FIM DO DIA]. Prioridades altas "furam" a fila lógica, mas tente encaixá-las sem destruir a eficiência geográfica se possível.
-    2. **Respeito ao Tempo**: Você deve somar o tempo de deslocamento (estimativa realista de trânsito urbano) + tempo de visita (${preferences.visitDurationMinutes} min) para cada parada.
-    3. **Ciclo Diário**: A rota de CADA dia deve começar no "Local de Partida" e deve ser desenhada para terminar próxima ao "Local de Chegada" no final do expediente.
-    4. **Múltiplos Dias**: Se a soma dos tempos ultrapassar o Horário Máximo de Retorno (${preferences.returnTime}), encerre o dia (retorne ao fim) e inicie um novo dia com os nós restantes.
-    5. **Lógica do Escritório**: Se "Passar no escritório" for SIM, trate como um nó obrigatório respeitando a janela de tempo solicitada.
-    6. **Geolocalização**: Use o conhecimento do Google Maps para validar a proximidade real.
-    7. **Info Estacionamento**: Se a visita tiver [INFO ESTACIONAMENTO], inclua esse texto EXATAMENTE como está no campo "parkingSuggestion".
+    --- INSTRUÇÕES DE ANÁLISE DE RISCO (CRÍTICO) ---
+    Para CADA parada, você deve avaliar o endereço e o horário estimado de chegada para preencher o objeto 'risks':
+    1. **Security (Segurança):** O bairro/região é considerado perigoso (roubo de carga/veículo) historicamente? O horário da visita (ex: tarde da noite) aumenta esse risco? Marque 'security': true se houver risco real.
+    2. **Flood (Alagamento):** A região é uma baixada ou conhecida por enchentes (ex: marginais, vales)? 
+    3. **Towing (Guincho):** É uma região central com fiscalização de trânsito agressiva e pouca vaga de rua?
+    4. **Description:** Se houver qualquer risco (true), escreva uma frase curta e direta explicando o motivo (ex: "Área com alto índice de roubos à noite" ou "Zona de difícil estacionamento, risco de multa").
+
+    --- ALGORITMO DE OTIMIZAÇÃO APLICADO ---
+    Para garantir eficiência matemática e lógica, aplique a seguinte metodologia passo-a-passo:
+    
+    1. **Cluster-First (Agrupamento):** 
+       Agrupe as visitas por proximidade geográfica (bairros ou zonas). O roteiro deve esgotar um cluster antes de mover para o próximo para evitar deslocamentos pendulares improdutivos.
+    
+    2. **Nearest Neighbor com Refinamento 2-Opt:**
+       Dentro de cada cluster, ordene as paradas utilizando a lógica do "Vizinho Mais Próximo" a partir do ponto anterior.
+       Verifique se há cruzamentos de rota óbvios (ex: ir do ponto A ao C passando pelo B, quando A->B->C é mais curto) e corrija-os (simulação de 2-Opt).
+
+    3. **Restrições Hard & Soft:**
+       - **Hard:** Janelas de horário de funcionamento e almoço DEVEM ser respeitadas.
+       - **Soft:** Evite áreas de risco ('security': true) no final do dia (após as 17h/18h). Priorize estas áreas para o período da manhã/tarde cedo.
+
+    4. **Multi-Dia:**
+       Se o tempo total exceder o limite do dia, divida o roteiro em múltiplos dias mantendo a lógica de clusters (ex: Dia 1 Zona Norte, Dia 2 Zona Sul).
 
     FORMATO DE RESPOSTA (JSON Array):
-    Retorne APENAS o JSON. Sem markdown, sem explicações.
+    Retorne APENAS o JSON.
     [
       {
         "dayLabel": "Dia 1",
         "date": "YYYY-MM-DD",
-        "summary": "Resumo estratégico da rota (ex: Zona Sul -> Centro)",
+        "summary": "Resumo da rota focado na lógica utilizada (ex: 'Roteiro focado na Zona Sul com paradas agrupadas')",
         "totalDistanceKm": "X km",
-        "totalTimeHours": "X horas",
+        "totalTimeHours": "X h",
         "stops": [
           {
-            "id": "unique_id",
+            "id": "uuid",
             "order": 1,
             "name": "Nome",
             "type": "Cliente",
-            "address": "Endereço",
+            "address": "Endereço Completo",
             "estimatedArrival": "HH:MM",
             "durationMinutes": ${preferences.visitDurationMinutes},
-            "notes": "Motivo da sequência (ex: 'Próximo ao anterior')",
-            "risks": { "flood": boolean, "towing": boolean, "description": "..." },
-            "parkingSuggestion": "...",
-            "phoneNumber": "...",
+            "notes": "Obs logística",
+            "risks": { 
+                "flood": boolean, 
+                "towing": boolean, 
+                "security": boolean, 
+                "description": "Texto explicativo do risco ou null" 
+            },
+            "parkingSuggestion": "Dica de onde parar baseada na preferência ${preferences.parkingPreference}",
+            "phoneNumber": "Telefone se houver",
             "coordinates": { "lat": 0, "lng": 0 }
           }
         ]
@@ -158,7 +167,7 @@ export const generateRoutePlan = async (
         text = objectMatch[0];
       } else {
         console.error("Invalid JSON response:", text.substring(0, 200));
-        throw new Error("A resposta da IA não está no formato JSON esperado. Verifique se a lista de endereços é válida.");
+        throw new Error("A resposta da IA não está no formato JSON esperado.");
       }
     }
 

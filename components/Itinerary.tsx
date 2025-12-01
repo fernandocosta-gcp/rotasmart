@@ -96,80 +96,112 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
 
       {/* Timeline */}
       <div className="relative border-l-4 border-blue-100 ml-4 md:ml-6 space-y-8 pb-8">
-        {currentDay.stops.map((stop, index) => (
-          <div key={index} className="relative pl-6 md:pl-8">
-            {/* Dot on Timeline */}
-            <div className="absolute -left-3.5 top-6 w-7 h-7 rounded-full bg-white border-4 border-blue-500 flex items-center justify-center z-10">
-                <span className="text-xs font-bold text-blue-700">{stop.order}</span>
-            </div>
-
-            {/* Card */}
-            <div className="bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow p-5 border border-gray-100">
-              <div className="flex flex-col md:flex-row justify-between md:items-center mb-3">
-                <div className="flex items-center gap-3 mb-2 md:mb-0">
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide flex items-center gap-2 border ${getTypeColor(stop.type)}`}>
-                        {getTypeIcon(stop.type)}
-                        {stop.type}
-                    </span>
-                    <h3 className="text-lg font-bold text-gray-800">{stop.name}</h3>
-                </div>
-                <div className="text-right min-w-[100px]">
-                    <div className="text-2xl font-bold text-blue-600">{stop.estimatedArrival}</div>
-                    <div className="text-xs text-gray-500">Duração: {stop.durationMinutes} min</div>
-                </div>
+        {currentDay.stops.map((stop, index) => {
+          // Check if there are any risks
+          const hasRisk = stop.risks.flood || stop.risks.towing || stop.risks.security;
+          
+          return (
+            <div key={index} className="relative pl-6 md:pl-8">
+              {/* Dot on Timeline */}
+              <div className={`absolute -left-3.5 top-6 w-7 h-7 rounded-full border-4 flex items-center justify-center z-10 ${hasRisk ? 'bg-orange-50 border-orange-500' : 'bg-white border-blue-500'}`}>
+                  {hasRisk ? (
+                      <span className="text-[10px] font-bold text-orange-600">!</span>
+                  ) : (
+                      <span className="text-xs font-bold text-blue-700">{stop.order}</span>
+                  )}
               </div>
 
-              <p className="text-gray-600 text-sm mb-4 flex items-start">
-                <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                {stop.address}
-              </p>
-
-              {/* Metadata Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
-                {stop.phoneNumber && (
-                    <div className="flex items-center text-gray-600">
-                         <svg className="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path></svg>
-                         {stop.phoneNumber}
-                    </div>
-                )}
-                {stop.parkingSuggestion && (
-                    <div className="flex items-center text-indigo-600 bg-indigo-50 p-2 rounded">
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        <span className="font-medium">Estacionamento: </span> <span className="ml-1 truncate">{stop.parkingSuggestion}</span>
-                    </div>
-                )}
-              </div>
-
-              {/* Risks/Warnings */}
-              {(stop.risks.flood || stop.risks.towing) && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-start">
-                      <svg className="w-5 h-5 text-red-500 mr-2 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                      <div className="text-sm text-red-800">
-                          <p className="font-bold">Atenção:</p>
-                          <ul className="list-disc pl-4 mt-1">
-                              {stop.risks.flood && <li>Risco de Alagamento na região</li>}
-                              {stop.risks.towing && <li>Zona sujeita a guincho (Proibido Estacionar)</li>}
-                              {stop.risks.description && <li className="italic">{stop.risks.description}</li>}
-                          </ul>
-                      </div>
+              {/* Card */}
+              <div className={`bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow p-5 border ${hasRisk ? 'border-orange-200' : 'border-gray-100'}`}>
+                <div className="flex flex-col md:flex-row justify-between md:items-center mb-3">
+                  <div className="flex items-center gap-3 mb-2 md:mb-0">
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide flex items-center gap-2 border ${getTypeColor(stop.type)}`}>
+                          {getTypeIcon(stop.type)}
+                          {stop.type}
+                      </span>
+                      <h3 className="text-lg font-bold text-gray-800">{stop.name}</h3>
                   </div>
-              )}
+                  <div className="text-right min-w-[100px]">
+                      <div className="text-2xl font-bold text-blue-600">{stop.estimatedArrival}</div>
+                      <div className="text-xs text-gray-500">Duração: {stop.durationMinutes} min</div>
+                  </div>
+                </div>
 
-              <div className="flex justify-between items-center pt-3 border-t border-gray-100">
-                  <span className="text-xs text-gray-400 italic">{stop.notes}</span>
-                  <a 
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="text-blue-600 hover:text-blue-800 font-semibold text-sm flex items-center"
-                  >
-                      Abrir no Maps
-                      <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                  </a>
+                <p className="text-gray-600 text-sm mb-4 flex items-start">
+                  <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                  {stop.address}
+                </p>
+
+                {/* Metadata Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
+                  {stop.phoneNumber && (
+                      <div className="flex items-center text-gray-600">
+                          <svg className="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path></svg>
+                          {stop.phoneNumber}
+                      </div>
+                  )}
+                  {stop.parkingSuggestion && (
+                      <div className="flex items-center text-indigo-600 bg-indigo-50 p-2 rounded">
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                          <span className="font-medium">Estacionamento: </span> <span className="ml-1 truncate">{stop.parkingSuggestion}</span>
+                      </div>
+                  )}
+                </div>
+
+                {/* Risks/Warnings Enhanced */}
+                {hasRisk && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4 flex items-start animate-fade-in-up">
+                        <div className="flex-shrink-0 mr-3">
+                           {stop.risks.security ? (
+                              <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                           ) : (
+                              <svg className="w-6 h-6 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                           )}
+                        </div>
+                        <div className="text-sm text-red-800 flex-1">
+                            <p className="font-bold mb-1">Análise de Risco:</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {stop.risks.security && (
+                                  <span className="flex items-center text-xs bg-red-100 text-red-800 px-2 py-1 rounded font-medium">
+                                     🛡️ Risco de Segurança / Roubo
+                                  </span>
+                                )}
+                                {stop.risks.flood && (
+                                  <span className="flex items-center text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium">
+                                     💧 Área de Alagamento
+                                  </span>
+                                )}
+                                {stop.risks.towing && (
+                                  <span className="flex items-center text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded font-medium">
+                                     🚗 Risco de Guincho/Multa
+                                  </span>
+                                )}
+                            </div>
+                            {stop.risks.description && (
+                                <p className="mt-2 text-gray-700 italic border-l-2 border-red-300 pl-2">
+                                  "{stop.risks.description}"
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex justify-between items-center pt-3 border-t border-gray-100">
+                    <span className="text-xs text-gray-400 italic">{stop.notes}</span>
+                    <a 
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="text-blue-600 hover:text-blue-800 font-semibold text-sm flex items-center"
+                    >
+                        Abrir no Maps
+                        <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                    </a>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

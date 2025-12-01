@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import SetupForm from './components/SetupForm';
 import Itinerary from './components/Itinerary';
+import LoadingModal from './components/LoadingModal';
 import { UserPreferences, RawSheetRow, MultiDayPlan } from './types';
 import { generateRoutePlan } from './services/geminiService';
 
@@ -50,6 +51,8 @@ const App: React.FC = () => {
       </header>
 
       <main className="container mx-auto px-4 py-10">
+        {isLoading && <LoadingModal />}
+        
         {!routePlan ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh]">
                  <SetupForm onGenerate={handleGenerate} isLoading={isLoading} />
