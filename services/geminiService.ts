@@ -1,14 +1,69 @@
 import { GoogleGenAI } from "@google/genai";
 import { RawSheetRow, UserPreferences, MultiDayPlan } from "../types";
 
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Nova função para verificar ônibus na fase de Setup
+export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<string, string>> => {
+  // Filtra apenas linhas com endereço válido
+  const validRows = rows.filter(r => r.Endereco && r.Endereco.length > 5);
+  if (validRows.length === 0) return {};
+
+  // Para evitar sobrecarregar o contexto, processamos em lotes de 15 se necessário, 
+  // mas aqui faremos um prompt único otimizado.
+  // UPDATE: Construção de endereço mais robusta (Endereço + Bairro + Município)
+  const locations = validRows.map(r => {
+      const fullAddress = [r.Endereco, r.Bairro, r.Municipio].filter(Boolean).join(", ");
+      return `ID: ${r.id} | Address: ${fullAddress}`;
+  }).join('\n');
+
+  const prompt = `
+    You are a geo-spatial analyst using Google Maps.
+    For each of the following locations (identified by ID), check for a **Bus Stop** within a **300 meter radius**.
+    
+    LOCATIONS:
+    ${locations}
+
+    RETURN:
+    A single JSON object where:
+    - Keys are the IDs provided.
+    - Values are the bus stop description (e.g., "Ponto na Rua X, 100") OR exactly "Nenhum ponto de ônibus a 300m" if none found.
+    
+    Important: Return ONLY the JSON object. Do not add markdown formatting.
+  `;
+
+  try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          tools: [{ googleMaps: {} }],
+          // responseMimeType: 'application/json' // REMOVED: Unsupported with Google Maps tool
+        }
+      });
+      
+      let text = response.text;
+      if(!text) return {};
+
+      // Manual JSON extraction since we can't enforce MIME type
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+          text = jsonMatch[0];
+      }
+
+      return JSON.parse(text);
+  } catch (e) {
+      console.error("Batch Bus Check failed", e);
+      throw new Error("Falha ao consultar Google Maps para transporte público.");
+  }
+};
+
 export const generateRoutePlan = async (
   sheetData: RawSheetRow[],
   preferences: UserPreferences,
   currentCoords?: { lat: number; lng: number }
 ): Promise<MultiDayPlan> => {
   
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
   const stopsList = sheetData.map(row => {
     let priorityNote = "";
     if (row.priority === 'high') priorityNote = " [PRIORIDADE ALTA: Visitar no início do roteiro]";
@@ -23,8 +78,16 @@ export const generateRoutePlan = async (
     const parkingInfo = row.customParkingInfo 
       ? ` [INFO ESTACIONAMENTO: ${row.customParkingInfo}]` 
       : '';
+    
+    // Pass pre-checked bus info to Gemini to save tokens/time
+    const busInfo = row.nearbyBusStop 
+      ? ` [BUS STOP CHECKED: ${row.nearbyBusStop}]` 
+      : '';
 
-    return `- ${row.Nome} (${row.Endereco || 'Endereço não especificado'}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}`;
+    // Utilizar endereço completo também na geração de rota para melhor precisão
+    const fullAddress = [row.Endereco, row.Bairro, row.Municipio].filter(Boolean).join(", ") || 'Endereço não especificado';
+
+    return `- ${row.Nome} (${fullAddress}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}${busInfo}`;
   }).join('\n');
 
   // Determine locations
@@ -109,6 +172,15 @@ export const generateRoutePlan = async (
     - chanceOfRain: Probabilidade de chuva (ex: "10%", "80%").
     - isStormy: true se houver previsão de tempestade, chuva torrencial ou granizo naquele horário específico.
 
+    --- INSTRUÇÕES DE MOBILIDADE URBANA (TRANSPORTE PÚBLICO) ---
+    Para CADA endereço:
+    1. Se o campo "BUS STOP CHECKED" já estiver presente na descrição do cliente, USE-O.
+    2. Se NÃO estiver presente, UTILIZE a ferramenta do Google Maps para investigar arredores (raio 300m).
+    
+    Campo 'nearbyBusStop' (OBRIGATÓRIO):
+    - Se encontrar: Retorne o nome do ponto ou "Ponto na [Nome da Rua] (aprox. Xm)".
+    - Se NÃO encontrar no raio de 300m: Retorne exatamente a string "Nenhum ponto de ônibus num raio de 300m".
+
     --- INSTRUÇÕES DE ANÁLISE DE RISCO ---
     Para CADA parada, avalie o endereço e horário:
     1. **Security:** Bairro perigoso ou horário de risco?
@@ -154,6 +226,7 @@ export const generateRoutePlan = async (
                 "chanceOfRain": "10%",
                 "isStormy": false
             },
+            "nearbyBusStop": "String OBRIGATÓRIA (Descrição ou 'Nenhum ponto...')",
             "parkingSuggestion": "Dica de estacionamento",
             "phoneNumber": "Telefone",
             "coordinates": { "lat": 0, "lng": 0 }

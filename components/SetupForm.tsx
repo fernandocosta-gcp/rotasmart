@@ -1,6 +1,7 @@
 import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
 import { UserPreferences, RawSheetRow, PriorityLevel, POSHealthData } from '../types';
 import { parseSheetFile, loadHealthBaseFromAssets, mergeRouteAndHealthData } from '../services/excelService';
+import { batchCheckBusStops } from '../services/geminiService';
 
 interface SetupFormProps {
   onGenerate: (prefs: UserPreferences, data: RawSheetRow[]) => void;
@@ -59,6 +60,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   
   // New state for file processing feedback
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [isCheckingBus, setIsCheckingBus] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // State for bulk selection
@@ -73,9 +75,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   const [currentParkingId, setCurrentParkingId] = useState<string | null>(null);
   const [parkingText, setParkingText] = useState('');
 
-  // State for POS Health Modal
+  // State for POS Health Modal (Individual)
   const [posModalOpen, setPosModalOpen] = useState(false);
   const [selectedPosData, setSelectedPosData] = useState<{name: string, data: POSHealthData[]} | null>(null);
+
+  // State for GLOBAL Health Modal
+  const [globalHealthOpen, setGlobalHealthOpen] = useState(false);
 
   // --- EFFECT: Load Static Health Base ---
   useEffect(() => {
@@ -182,6 +187,28 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
           setSelectedSectors(BUSINESS_SECTORS);
       }
   };
+
+  // --- BUS STOP CHECK LOGIC ---
+  const handleCheckBusStops = async () => {
+      if (sheetData.length === 0) return;
+      
+      setIsCheckingBus(true);
+      try {
+          const results = await batchCheckBusStops(sheetData);
+          
+          setSheetData(prev => prev.map(row => {
+              if (results[row.id]) {
+                  return { ...row, nearbyBusStop: results[row.id] };
+              }
+              return row;
+          }));
+      } catch (e) {
+          setError("Erro ao verificar pontos de ônibus. Tente novamente.");
+      } finally {
+          setIsCheckingBus(false);
+      }
+  };
+
 
   // --- Bulk Actions Logic ---
 
@@ -331,6 +358,43 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       return issues.join(' ');
   };
 
+  // Calcula estatísticas globais
+  const getGlobalStats = () => {
+    let totalMachines = 0;
+    let totalOperative = 0;
+    let totalCritical = 0;
+    let totalAttention = 0;
+    let totalIncidents = 0;
+    const criticalStores: {name: string, count: number}[] = [];
+
+    sheetData.forEach(row => {
+        if(row.posData) {
+            let rowCritical = 0;
+            row.posData.forEach(machine => {
+                totalMachines++;
+                if (machine.incidents) totalIncidents += machine.incidents;
+
+                const status = getHealthStatus(machine).label;
+                if(status === 'OPERATIVO') totalOperative++;
+                else if(status === 'CRÍTICO') {
+                    totalCritical++;
+                    rowCritical++;
+                }
+                else totalAttention++; // Includes COMPROMETIDO and ATENÇÃO
+            });
+            
+            if (rowCritical > 0) {
+                criticalStores.push({ name: row.Nome, count: rowCritical });
+            }
+        }
+    });
+
+    // Sort stores by most critical issues
+    criticalStores.sort((a, b) => b.count - a.count);
+
+    return { totalMachines, totalOperative, totalCritical, totalAttention, totalIncidents, criticalStores };
+  };
+
   const itemToDeleteName = itemToDelete ? sheetData.find(r => r.id === itemToDelete)?.Nome : '';
 
   // Helper to render the Gauge Chart inside Modal
@@ -473,18 +537,44 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     
                     {/* Header with Bulk Actions */}
                     <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-col gap-2 flex-shrink-0">
-                        <div className="flex justify-between items-center">
+                        <div className="flex flex-wrap justify-between items-center gap-2">
                             <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
-                            <div className="flex gap-3 text-xs">
+                            <div className="flex flex-wrap gap-3 text-xs items-center">
+                                 {/* New Button for Bus Check */}
+                                 <button
+                                     type="button"
+                                     onClick={handleCheckBusStops}
+                                     disabled={isCheckingBus}
+                                     className={`flex items-center gap-1 px-3 py-1.5 rounded-lg font-bold transition-colors shadow-sm ${isCheckingBus ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}
+                                 >
+                                     {isCheckingBus ? (
+                                         <>
+                                            <div className="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></div>
+                                            Verificando...
+                                         </>
+                                     ) : (
+                                         <>
+                                            🚌 Verificar Transporte
+                                         </>
+                                     )}
+                                 </button>
+                                 <button
+                                     type="button"
+                                     onClick={() => setGlobalHealthOpen(true)}
+                                     className="flex items-center gap-1 bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200 transition-colors shadow-sm"
+                                 >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                                    Monitoramento Global
+                                 </button>
                                  {(!healthMap || healthMap.size === 0) && (
-                                     <span className="text-orange-500 flex items-center" title="Dados de saúde das máquinas estão sendo simulados.">
-                                         ⚠️ Dados POS Simulados
+                                     <span className="text-orange-500 flex items-center ml-2 hidden md:inline" title="Dados de saúde das máquinas estão sendo simulados.">
+                                         ⚠️ Dados Simulados
                                      </span>
                                  )}
                                  <button 
                                     type="button" 
                                     onClick={() => { setSheetData([]); setFileName(''); setSelectedIds([]); }}
-                                    className="text-red-600 hover:text-red-800 font-medium"
+                                    className="text-red-600 hover:text-red-800 font-medium ml-2"
                                 >
                                     Reiniciar
                                 </button>
@@ -529,6 +619,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {sheetData.map((row) => {
                                     const hasPos = row.posData && row.posData.length > 0;
+                                    const busInfo = row.nearbyBusStop;
+                                    const hasBus = busInfo && !busInfo.toLowerCase().includes("nenhum");
+
                                     return (
                                         <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
                                             <td className="px-4 py-3">
@@ -568,21 +661,41 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                     </span>
                                                 )}
                                             </td>
-                                            <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={row.Endereco}>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="truncate">{row.Endereco}</span>
-                                                    <button 
-                                                        type="button"
-                                                        onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
-                                                        className="text-gray-400 hover:text-indigo-600 flex-shrink-0 transition-colors"
-                                                        title="Editar informações de estacionamento"
-                                                    >
-                                                        🅿️
-                                                    </button>
+                                            <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={`${row.Endereco}${row.Bairro ? `, ${row.Bairro}` : ''}${row.Municipio ? `, ${row.Municipio}` : ''}`}>
+                                                <div className="flex flex-col">
+                                                    <span className="truncate font-medium">{row.Endereco}</span>
+                                                    
+                                                    {/* Display Bairro and Municipio */}
+                                                    {(row.Bairro || row.Municipio) && (
+                                                        <span className="text-xs text-gray-500 truncate">
+                                                            {[row.Bairro, row.Municipio].filter(Boolean).join(", ")}
+                                                        </span>
+                                                    )}
                                                 </div>
+
                                                 {row.customParkingInfo && (
                                                     <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
                                                         {row.customParkingInfo}
+                                                    </div>
+                                                )}
+                                                {/* Bus Stop Info Rendering */}
+                                                {busInfo && (
+                                                    <div className={`flex items-center mt-2 text-xs font-medium px-2 py-1.5 rounded w-fit ${
+                                                        hasBus 
+                                                        ? "bg-blue-50 text-blue-700 border border-blue-200" 
+                                                        : "bg-gray-100 text-gray-500 border border-gray-200"
+                                                    }`}>
+                                                        {hasBus ? (
+                                                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                                                <path d="M5 10a1 1 0 011-1h12a1 1 0 011 1v7a1 1 0 01-1 1h-2a1 1 0 01-1-1v-1H8v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                                                                <path d="M5 10V7a2 2 0 012-2h10a2 2 0 012 2v3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                                                                <circle cx="7.5" cy="14.5" r="1.5" fill="currentColor" />
+                                                                <circle cx="16.5" cy="14.5" r="1.5" fill="currentColor" />
+                                                            </svg>
+                                                        ) : (
+                                                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
+                                                        )}
+                                                        <span className="truncate max-w-[200px]" title={busInfo}>{busInfo}</span>
                                                     </div>
                                                 )}
                                             </td>
@@ -837,6 +950,10 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
+        {/* ... Rest of modals ... */}
+        {/* Only included relevant modals to save context window if unchanged */}
+        {/* ... (Error, Filter, Delete, Parking, POS, Global modals remain as previous state) ... */}
+
         {error && (
             <div className="p-4 bg-red-100 text-red-700 rounded-xl text-sm flex items-center justify-center animate-pulse border border-red-200 shadow-sm mt-4 font-semibold">
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -919,7 +1036,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
         
-        {/* ... Rest of modals (delete, pos, parking) ... */}
+        {/* ... (Modals for Delete, Parking, POS, Global retained from original code) ... */}
         {/* Delete Confirmation Modal */}
         {(itemToDelete || isBulkDelete) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
@@ -994,7 +1111,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
              </div>
         )}
 
-        {/* POS Health Dashboard Modal */}
+        {/* POS Health Dashboard Modal - INDIVIDUAL */}
         {posModalOpen && selectedPosData && (
             <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md transition-opacity">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full overflow-hidden transform transition-all scale-100 animate-fade-in-up flex flex-col max-h-[90vh]">
@@ -1073,7 +1190,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                         </div>
 
                                         {/* Card Body Metrics */}
-                                        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                                             <div>
                                                 <span className="text-xs text-gray-500 block mb-1">Wifi / Sinal</span>
                                                 <div className="flex items-center gap-2">
@@ -1104,6 +1221,15 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                     {machine.paperStatus}
                                                 </span>
                                             </div>
+                                            <div>
+                                                <span className="text-xs text-gray-500 block mb-1">Tempo Ligado</span>
+                                                <div className="flex items-center gap-1">
+                                                     <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                     <span className="text-sm font-bold text-gray-800">
+                                                        {machine.avgUptime ? `${machine.avgUptime}h` : 'N/A'}
+                                                     </span>
+                                                </div>
+                                            </div>
                                         </div>
 
                                         {/* Footer / Analysis */}
@@ -1123,6 +1249,131 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     <div className="bg-gray-100 px-6 py-4 flex justify-end flex-shrink-0">
                         <button 
                             onClick={() => setPosModalOpen(false)}
+                            className="bg-transparent border border-[#3483fa] text-[#3483fa] font-bold py-2 px-6 rounded-lg hover:bg-blue-50 transition-colors shadow-sm"
+                        >
+                            Fechar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* POS Health Dashboard Modal - GLOBAL */}
+        {globalHealthOpen && (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md transition-opacity">
+                <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden transform transition-all scale-100 animate-fade-in-up flex flex-col max-h-[90vh]">
+                    {/* Header */}
+                    <div className="bg-[#3483fa] px-6 py-5 flex justify-between items-start flex-shrink-0">
+                        <div>
+                            <h2 className="text-xl font-bold text-white mb-1">Monitoramento Global de Parque</h2>
+                            <p className="text-blue-100 text-sm flex items-center">
+                                <span className="mr-2">Escopo:</span> 
+                                <span className="text-white font-semibold">Lista Atual de Importação</span>
+                                <span className="mx-2 text-blue-200">|</span>
+                                <span className="text-blue-100">{sheetData.length} Estabelecimentos Analisados</span>
+                            </p>
+                        </div>
+                        <button onClick={() => setGlobalHealthOpen(false)} className="text-white/80 hover:text-white transition-colors">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+
+                    <div className="p-6 bg-gray-50 overflow-y-auto custom-scrollbar">
+                        {(() => {
+                            const stats = getGlobalStats();
+                            return (
+                                <>
+                                    {/* Top Section: Gauge & Aggregates */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                                        <div className="h-full">
+                                            {renderHealthGauge(stats.totalMachines, stats.totalOperative)}
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4 h-full">
+                                            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-gray-500 uppercase font-bold mb-2">Total Equipamentos</span>
+                                                <span className="text-4xl font-bold text-gray-800">{stats.totalMachines}</span>
+                                            </div>
+                                            <div className="bg-green-50 p-4 rounded-xl border border-green-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-green-600 uppercase font-bold mb-2">Operativos (Saudáveis)</span>
+                                                <span className="text-4xl font-bold text-green-700">{stats.totalOperative}</span>
+                                            </div>
+                                            <div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-red-500 uppercase font-bold mb-2">Críticos / Total de Incidentes</span>
+                                                <span className="text-4xl font-bold text-red-700">
+                                                    {stats.totalCritical} <span className="text-red-400 mx-1">/</span> {stats.totalIncidents}
+                                                </span>
+                                            </div>
+                                            <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-yellow-600 uppercase font-bold mb-2">Atenção (Sinal/Bobina)</span>
+                                                <span className="text-4xl font-bold text-yellow-700">{stats.totalAttention}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Breakdown Section: Top Problematic Stores */}
+                                    <h4 className="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wide flex items-center">
+                                        <svg className="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                        Top Lojas com Problemas Críticos
+                                    </h4>
+                                    
+                                    {stats.criticalStores.length > 0 ? (
+                                        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                            <table className="min-w-full divide-y divide-gray-200">
+                                                <thead className="bg-gray-50">
+                                                    <tr>
+                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa</th>
+                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Máquinas Críticas</th>
+                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ação</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="bg-white divide-y divide-gray-200">
+                                                    {stats.criticalStores.slice(0, 10).map((store, idx) => (
+                                                        <tr key={idx} className="hover:bg-red-50/30 transition-colors">
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                                {store.name}
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-bold">
+                                                                {store.count}
+                                                            </td>
+                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        const row = sheetData.find(r => r.Nome === store.name);
+                                                                        if (row) {
+                                                                            setGlobalHealthOpen(false);
+                                                                            openPosModal(row);
+                                                                        }
+                                                                    }}
+                                                                    className="text-blue-600 hover:text-blue-900 hover:underline font-medium"
+                                                                >
+                                                                    Ver Detalhes
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            {stats.criticalStores.length > 10 && (
+                                                <div className="bg-gray-50 px-6 py-3 text-xs text-gray-500 text-center border-t border-gray-200">
+                                                    E mais {stats.criticalStores.length - 10} lojas com problemas...
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center text-green-800">
+                                            <p className="font-bold text-lg">Excelente!</p>
+                                            <p className="text-sm">Nenhuma loja apresenta máquinas com status crítico no momento.</p>
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
+                    </div>
+                    
+                    <div className="bg-gray-100 px-6 py-4 flex justify-end flex-shrink-0">
+                        <button 
+                            onClick={() => setGlobalHealthOpen(false)}
                             className="bg-transparent border border-[#3483fa] text-[#3483fa] font-bold py-2 px-6 rounded-lg hover:bg-blue-50 transition-colors shadow-sm"
                         >
                             Fechar

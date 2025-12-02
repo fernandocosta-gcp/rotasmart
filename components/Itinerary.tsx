@@ -234,6 +234,10 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
           // Check if there are any risks
           const hasRisk = stop.risks.flood || stop.risks.towing || stop.risks.security;
           
+          // Helper para texto do ônibus
+          const busInfo = stop.nearbyBusStop || "Nenhum ponto de ônibus identificado nas imediações.";
+          const hasBus = !busInfo.toLowerCase().includes("nenhum") && !busInfo.toLowerCase().includes("não identificad");
+
           return (
             <div key={index} className="relative pl-6 md:pl-8">
               {/* Dot on Timeline */}
@@ -261,10 +265,31 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
                   </div>
                 </div>
 
-                <p className="text-gray-600 text-sm mb-4 flex items-start">
-                  <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                  {stop.address}
-                </p>
+                <div className="mb-4">
+                    <p className="text-gray-600 text-sm flex items-start">
+                        <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        {stop.address}
+                    </p>
+                    
+                    {/* BUS STOP INFO (Always Rendered) */}
+                    <div className={`flex items-center mt-2 text-xs font-medium px-2 py-1.5 rounded w-fit ml-5 ${
+                        hasBus 
+                        ? "bg-blue-50 text-blue-700 border border-blue-200" 
+                        : "bg-gray-100 text-gray-500 border border-gray-200"
+                    }`}>
+                        {hasBus ? (
+                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M5 10a1 1 0 011-1h12a1 1 0 011 1v7a1 1 0 01-1 1h-2a1 1 0 01-1-1v-1H8v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                                <path d="M5 10V7a2 2 0 012-2h10a2 2 0 012 2v3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                                <circle cx="7.5" cy="14.5" r="1.5" fill="currentColor" />
+                                <circle cx="16.5" cy="14.5" r="1.5" fill="currentColor" />
+                            </svg>
+                        ) : (
+                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
+                        )}
+                        <span>{busInfo}</span>
+                    </div>
+                </div>
 
                 {/* Weather Section (NEW) */}
                 {stop.weather && (

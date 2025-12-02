@@ -28,6 +28,8 @@ export interface RawSheetRow {
   id: string;
   Nome: string;
   Endereco?: string;
+  Bairro?: string;     // Novo campo
+  Municipio?: string;  // Novo campo
   Observacoes?: string;
   Setor?: string;
   HorarioAbertura?: string;
@@ -35,6 +37,7 @@ export interface RawSheetRow {
   priority: PriorityLevel;
   customParkingInfo?: string; 
   posData?: POSHealthData[]; // Changed from single object to Array
+  nearbyBusStop?: string; // New field for pre-route check
   [key: string]: any;
 }
 
@@ -87,6 +90,7 @@ export interface RouteStop {
     isStormy: boolean; 
   };
   parkingSuggestion?: string;
+  nearbyBusStop?: string;
   phoneNumber?: string;
   googleMapsLink?: string;
 }

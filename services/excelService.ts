@@ -79,7 +79,8 @@ const generateMockPOSData = (seed: string): POSHealthData[] => {
             paperStatus: paperStatus[Math.floor(random(7 + offset) * paperStatus.length)] as any,
             firmwareVersion: `v${Math.floor(random(8 + offset) * 5)}.${Math.floor(random(9 + offset) * 9)}`,
             incidents: errors > 5 ? 1 : 0,
-            lastUpdate: '2023-10-25'
+            lastUpdate: '2023-10-25',
+            avgUptime: Math.floor(random(10 + offset) * 72) + 1 // MOCK Uptime between 1 and 72 hours
         });
     }
 
@@ -131,7 +132,12 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
         );
 
         let nameIdx = findIdx(['nome', 'cliente', 'estabelecimento', 'empresa', 'name']);
+        // O campo "Endereço (Fictício)" será capturado aqui pelo 'endereço' ou 'endereco'
         let addrIdx = findIdx(['endereço', 'endereco', 'rua', 'local', 'address']);
+        
+        // Novos campos para composição de endereço completo
+        let neighborIdx = findIdx(['bairro', 'neighborhood', 'distrito']);
+        let cityIdx = findIdx(['município', 'municipio', 'cidade', 'city']);
         
         // --- FALLBACK STRATEGY ---
         let dataRows = rows;
@@ -172,6 +178,8 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
             id: generateUUID(),
             Nome: name,
             Endereco: rawAddr ? String(rawAddr).trim() : 'Endereço não informado',
+            Bairro: (neighborIdx !== -1 && row[neighborIdx]) ? String(row[neighborIdx]).trim() : undefined,
+            Municipio: (cityIdx !== -1 && row[cityIdx]) ? String(row[cityIdx]).trim() : undefined,
             Observacoes: (obsIdx !== -1 && row[obsIdx]) ? String(row[obsIdx]).trim() : '',
             Setor: (sectorIdx !== -1 && row[sectorIdx]) ? String(row[sectorIdx]).trim() : undefined,
             HorarioAbertura: (openIdx !== -1) ? formatExcelTime(row[openIdx]) : undefined,
