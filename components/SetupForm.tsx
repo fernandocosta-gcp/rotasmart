@@ -2,6 +2,8 @@ import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
 import { UserPreferences, RawSheetRow, PriorityLevel, POSHealthData } from '../types';
 import { parseSheetFile, loadHealthBaseFromAssets, mergeRouteAndHealthData } from '../services/excelService';
 import { batchCheckBusStops } from '../services/geminiService';
+import LoadingModal from './LoadingModal';
+import AnalysisModal from './AnalysisModal';
 
 interface SetupFormProps {
   onGenerate: (prefs: UserPreferences, data: RawSheetRow[]) => void;
@@ -81,6 +83,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
 
   // State for GLOBAL Health Modal
   const [globalHealthOpen, setGlobalHealthOpen] = useState(false);
+  
+  // State for ANALYSIS Modal (NEW)
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
 
   // --- EFFECT: Load Static Health Base ---
   useEffect(() => {
@@ -188,7 +193,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       }
   };
 
-  // --- BUS STOP CHECK LOGIC ---
+  // --- BUS STOP CHECK LOGIC (UPDATED) ---
   const handleCheckBusStops = async () => {
       if (sheetData.length === 0) return;
       
@@ -197,8 +202,32 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
           const results = await batchCheckBusStops(sheetData);
           
           setSheetData(prev => prev.map(row => {
-              if (results[row.id]) {
-                  return { ...row, nearbyBusStop: results[row.id] };
+              const result = results[row.id];
+              
+              if (result) {
+                  // Verifica se o retorno é negativo
+                  const isNegative = result.toLowerCase().includes("nenhum") || result.toLowerCase().includes("não encontrado");
+
+                  if (isNegative) {
+                      return {
+                          ...row,
+                          busStatus: 'not_found'
+                          // Mantém o endereço original e contexto
+                      };
+                  } else {
+                      // Limpeza da string para remover "Ponto de ônibus na", "Parada em", etc.
+                      let cleanAddress = result.replace(/^(Ponto de ônibus (na|no|em|a)|Ponto (na|no|em|a)|Parada (na|no|em|a)|Localizado (na|no|em|a)|Próximo (ao?|à)|Em frente (ao?|à))\s+/i, '');
+                      
+                      // Capitalize first letter
+                      cleanAddress = cleanAddress.charAt(0).toUpperCase() + cleanAddress.slice(1);
+
+                      return {
+                          ...row,
+                          Endereco: cleanAddress, // Substitui o endereço pelo ponto encontrado
+                          busStatus: 'found'
+                          // Mantém o Bairro e Municipio originais para o layout
+                      };
+                  }
               }
               return row;
           }));
@@ -315,26 +344,11 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       }
   };
 
-  // POS Health Helper
-  // Lógica de Diagnóstico Geral
+  // POS Health Helper (Same as previous)
   const getHealthStatus = (data: POSHealthData) => {
-      // Prioridade 1: Crítico (Erro alto)
-      if (data.errorRate >= 6) {
-          return { label: 'CRÍTICO', color: 'text-red-600 bg-red-100', border: 'border-red-200' };
-      }
-
-      // Prioridade 2: Comprometido (Problema de Bobina ou Sinal Baixo)
-      if (data.paperStatus !== 'OK' || data.signalStrength < 20) {
-           return { label: 'COMPROMETIDO', color: 'text-orange-600 bg-orange-100', border: 'border-orange-200' };
-      }
-
-      // Prioridade 3: Operativo (Condições ideais)
-      // Nota: Bobina 'OK' é implícito se não entrou no anterior, mas mantemos a clareza
-      if (data.errorRate < 6 && data.signalStrength > 40) {
-          return { label: 'OPERATIVO', color: 'text-green-600 bg-green-100', border: 'border-green-200' };
-      }
-
-      // Fallback: ATENÇÃO (Ex: Sinal entre 20% e 40% mas sem erro e com papel OK)
+      if (data.errorRate >= 6) return { label: 'CRÍTICO', color: 'text-red-600 bg-red-100', border: 'border-red-200' };
+      if (data.paperStatus !== 'OK' || data.signalStrength < 20) return { label: 'COMPROMETIDO', color: 'text-orange-600 bg-orange-100', border: 'border-orange-200' };
+      if (data.errorRate < 6 && data.signalStrength > 40) return { label: 'OPERATIVO', color: 'text-green-600 bg-green-100', border: 'border-green-200' };
       return { label: 'ATENÇÃO', color: 'text-yellow-600 bg-yellow-100', border: 'border-yellow-200' };
   };
 
@@ -465,6 +479,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
 
   return (
     <div className={`bg-white rounded-2xl shadow-xl p-6 w-full mx-auto border border-gray-100 transition-all duration-300 ${sheetData.length > 0 ? 'max-w-7xl' : 'max-w-3xl'}`}>
+      {/* Show Loading Modal for Bus Checks */}
+      {isCheckingBus && <LoadingModal type="bus" />}
+
+      {/* Show Analysis Modal */}
+      {showAnalysisModal && <AnalysisModal data={sheetData} onClose={() => setShowAnalysisModal(false)} />}
+
       <div className="mb-6 text-center">
         <h2 className="text-3xl font-bold text-gray-800 mb-2">Planejar Rotas</h2>
         <p className="text-gray-500">Configure sua jornada e revise seus clientes.</p>
@@ -540,7 +560,16 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                         <div className="flex flex-wrap justify-between items-center gap-2">
                             <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
                             <div className="flex flex-wrap gap-3 text-xs items-center">
-                                 {/* New Button for Bus Check */}
+                                 {/* NEW: Analysis Module Button */}
+                                 <button
+                                     type="button"
+                                     onClick={() => setShowAnalysisModal(true)}
+                                     className="flex items-center gap-1 bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-200 transition-colors shadow-sm"
+                                 >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                                    Módulo de Análise
+                                 </button>
+                                 
                                  <button
                                      type="button"
                                      onClick={handleCheckBusStops}
@@ -554,7 +583,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                          </>
                                      ) : (
                                          <>
-                                            🚌 Verificar Transporte
+                                            🚌 Sub. por Pontos de Bus
                                          </>
                                      )}
                                  </button>
@@ -619,8 +648,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {sheetData.map((row) => {
                                     const hasPos = row.posData && row.posData.length > 0;
-                                    const busInfo = row.nearbyBusStop;
-                                    const hasBus = busInfo && !busInfo.toLowerCase().includes("nenhum");
+                                    const busStatus = row.busStatus;
+                                    const isBusStop = busStatus === 'found';
+                                    const isBusNotFound = busStatus === 'not_found';
 
                                     return (
                                         <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
@@ -663,39 +693,38 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             </td>
                                             <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={`${row.Endereco}${row.Bairro ? `, ${row.Bairro}` : ''}${row.Municipio ? `, ${row.Municipio}` : ''}`}>
                                                 <div className="flex flex-col">
-                                                    <span className="truncate font-medium">{row.Endereco}</span>
+                                                    <div className="flex items-center gap-2">
+                                                        {(isBusStop || isBusNotFound) && (
+                                                             <span 
+                                                                className={`flex-shrink-0 p-0.5 rounded ${isBusNotFound ? 'text-red-500 bg-red-50' : 'text-blue-600 bg-blue-50'}`}
+                                                                title={isBusNotFound ? "sem ponto nas prox de 300m" : "Ponto de ônibus próximo"}
+                                                             >
+                                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 10a1 1 0 011-1h12a1 1 0 011 1v7a1 1 0 01-1 1h-2a1 1 0 01-1-1v-1H8v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-7z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v4m0 0l-2-2m2 2l2-2"></path></svg>
+                                                             </span>
+                                                        )}
+                                                        <span className="truncate font-medium text-gray-900">{row.Endereco}</span>
+                                                    </div>
                                                     
                                                     {/* Display Bairro and Municipio */}
                                                     {(row.Bairro || row.Municipio) && (
-                                                        <span className="text-xs text-gray-500 truncate">
+                                                        <span className="text-xs text-gray-500 truncate mt-0.5">
                                                             {[row.Bairro, row.Municipio].filter(Boolean).join(", ")}
                                                         </span>
                                                     )}
                                                 </div>
 
+                                                <button 
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
+                                                        className="text-gray-400 hover:text-indigo-600 flex-shrink-0 transition-colors hidden"
+                                                        title="Editar informações de estacionamento"
+                                                >
+                                                        🅿️
+                                                </button>
+
                                                 {row.customParkingInfo && (
                                                     <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
                                                         {row.customParkingInfo}
-                                                    </div>
-                                                )}
-                                                {/* Bus Stop Info Rendering */}
-                                                {busInfo && (
-                                                    <div className={`flex items-center mt-2 text-xs font-medium px-2 py-1.5 rounded w-fit ${
-                                                        hasBus 
-                                                        ? "bg-blue-50 text-blue-700 border border-blue-200" 
-                                                        : "bg-gray-100 text-gray-500 border border-gray-200"
-                                                    }`}>
-                                                        {hasBus ? (
-                                                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                                                <path d="M5 10a1 1 0 011-1h12a1 1 0 011 1v7a1 1 0 01-1 1h-2a1 1 0 01-1-1v-1H8v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
-                                                                <path d="M5 10V7a2 2 0 012-2h10a2 2 0 012 2v3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
-                                                                <circle cx="7.5" cy="14.5" r="1.5" fill="currentColor" />
-                                                                <circle cx="16.5" cy="14.5" r="1.5" fill="currentColor" />
-                                                            </svg>
-                                                        ) : (
-                                                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
-                                                        )}
-                                                        <span className="truncate max-w-[200px]" title={busInfo}>{busInfo}</span>
                                                     </div>
                                                 )}
                                             </td>

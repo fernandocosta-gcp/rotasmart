@@ -2,7 +2,7 @@
 
 Este é um sistema de otimização de rotas logísticas focado em visitas diárias (vendas, entregas, assistência técnica), construído com **React**, **TypeScript** e alimentado pela inteligência artificial do **Google Gemini**.
 
-O diferencial deste projeto não é apenas calcular a menor distância, mas entender o **contexto urbano**, avaliando riscos de segurança, fiscalização e janelas de tempo, algo que algoritmos matemáticos puros muitas vezes ignoram.
+O diferencial deste projeto não é apenas calcular a menor distância, mas entender o **contexto urbano**, avaliando riscos de segurança, fiscalização e janelas de tempo, além de fornecer **inteligência de negócios** através de aprendizado de máquina.
 
 ---
 
@@ -10,55 +10,62 @@ O diferencial deste projeto não é apenas calcular a menor distância, mas ente
 
 Ao contrário de roteirizadores tradicionais que usam apenas geometria, este sistema utiliza o Google Gemini 2.5 Flash simulando um **VRP Solver (Vehicle Routing Problem)** através de uma engenharia de prompt avançada.
 
-A instrução enviada à IA segue a metodologia **"Cluster-First, Route-Second"**, combinada com heurísticas de refinamento. Abaixo, detalhamos a lógica instruída ao modelo:
+A instrução enviada à IA segue a metodologia **"Cluster-First, Route-Second"**, combinada com heurísticas de refinamento:
 
-### 1. Cluster-First (Agrupamento Geográfico)
-O algoritmo divide os pontos de parada em "clusters" (agrupamentos) baseados em zonas ou bairros.
-*   **Objetivo:** Evitar deslocamentos pendulares (ziguezagues) cruzando a cidade desnecessariamente.
-*   **Regra:** O roteiro deve esgotar todas as visitas de uma região (ex: Zona Norte) antes de iniciar o deslocamento para a próxima (ex: Centro).
-
-### 2. Nearest Neighbor & Cheapest Insertion
-Dentro de cada cluster, a sequência é definida por heurísticas gulosas:
-*   **Nearest Neighbor (Vizinho Mais Próximo):** A partir do ponto atual, qual é o próximo ponto mais próximo que ainda não foi visitado?
-*   **Cheapest Insertion:** Onde inserir uma nova parada na rota existente de forma que o aumento do custo (tempo/distância) seja o menor possível?
-
-### 3. Refinamento 2-Opt
-Após gerar uma rota inicial, o modelo é instruído a aplicar mentalmente a lógica **2-Opt** para remover cruzamentos de rota.
-*   *Cenário:* Se a rota faz A -> B -> C -> D, mas o caminho se cruza, o modelo avalia se A -> C -> B -> D é mais eficiente.
-
-### 4. Análise de Risco e Restrições (Contexto Semântico)
-Aqui entra a vantagem da LLM sobre a matemática pura. O modelo avalia cada endereço considerando:
-*   **Segurança (Crime Risk):** Evita agendar áreas perigosas para o final do dia/noite.
-*   **Mobilidade (Flood/Towing):** Identifica áreas de alagamento ou zonas de guincho agressivas.
-*   **Hard Constraints:** Janelas de horário de funcionamento (Abre/Fecha) e Horário de Almoço.
+1.  **Cluster-First:** Agrupa visitas por bairros/zonas para evitar deslocamentos pendulares.
+2.  **Time-Windows:** Respeita rigorosamente horários de abertura/fechamento e pausas de almoço.
+3.  **Análise de Risco:** Avalia semanticamente o endereço para alertar sobre áreas de alagamento, risco de segurança ou zonas de guincho.
 
 ---
 
-## 🛠️ Stack Tecnológico
+## 📊 Inteligência de Dados e Machine Learning
+
+O sistema vai além do roteamento, atuando como um **Analista de Negócios** via Aprendizado de Máquina Não-Supervisionado executado diretamente no navegador.
+
+### Segmentação Automática (K-Means Clustering)
+Implementamos o algoritmo **K-Means** (Unsupervised Learning) para descobrir padrões ocultos na base de clientes sem necessidade de categorização manual prévia.
+
+*   **Vetores de Análise:** O algoritmo cruza *Faturamento Médio*, *Horário de Abertura*, *Horário de Fechamento* e *Duração da Operação*.
+*   **Perfis Dinâmicos:** O sistema agrupa e rotula automaticamente os estabelecimentos em perfis estratégicos:
+    *   **💰 Alto Desempenho:** Líderes de receita em horário comercial.
+    *   **☕ Manhã Premium:** Lojas com alto fluxo matinal.
+    *   **🏪 Operação Estendida:** Estabelecimentos com longas jornadas (madrugada/noite).
+    *   **📉 Baixo Desempenho:** Oportunidades de crescimento ou risco de churn.
+*   **Aplicação:** Permite estratégias de visita diferenciadas (ex: visitas de reposição para lojas noturnas, visitas de relacionamento para alto desempenho).
+
+---
+
+## 🛠️ Funcionalidades para Field Service (FSR)
+
+Focado na eficiência do técnico de campo (Field Service Representative), o sistema oferece ferramentas de diagnóstico e logística fina.
+
+### 1. Monitoramento de Saúde POS (IoT Digital Twin)
+Um dashboard completo para monitoramento preventivo do parque de máquinas de cartão (POS).
+*   **Métricas em Tempo Real:** Monitora Nível de Bateria, Sinal Wifi/4G, Taxa de Erros e Status da Bobina (Papel).
+*   **Índice de Operacionalidade:** Um gráfico de "medidor" (Gauge Chart) resume a saúde geral do cliente ou da rota.
+*   **Manutenção Preditiva:** O sistema alerta sobre máquinas críticas antes da visita, permitindo que o técnico já saia da base com os suprimentos ou equipamentos de troca corretos.
+
+### 2. Validação de Transporte Público (Bus Stop Grounding)
+Integração profunda com **Google Maps** via Gemini Tools para enriquecimento de endereço e mobilidade urbana.
+*   **Varredura de Raio:** O sistema analisa um raio de 300 metros das coordenadas do cliente.
+*   **Substituição Inteligente:** Se um ponto de ônibus é identificado, o sistema pode (opcionalmente) substituir o endereço logístico pela referência do ponto (ex: *"Ponto da Av. Brasil, em frente ao nº 500"*).
+*   **Benefício:** Essencial para técnicos que utilizam transporte público ou para facilitar a localização visual em áreas de numeração confusa.
+
+---
+
+## 🚀 Stack Tecnológico
 
 *   **Frontend:** React 19, TypeScript, Tailwind CSS.
 *   **AI & Logic:** Google GenAI SDK (`@google/genai`), Modelo `gemini-2.5-flash`.
 *   **Dados:** `xlsx` (SheetJS) para leitura de planilhas Excel/CSV.
-*   **Mapas:** Google Maps Grounding (via Gemini Tools) para validação de coordenadas.
+*   **Mapas:** Google Maps Grounding (via Gemini Tools).
 
-## 🚀 Como Usar
+## 📋 Como Usar
 
-1.  **Upload:** Carregue um arquivo `.xlsx` ou `.csv` contendo as colunas: `Nome`, `Endereço`, `Obs`, `HorárioAbertura`, `HorárioFechamento`.
-2.  **Configuração:** Defina horário de saída/retorno, duração média das visitas, pausa para almoço e se deve passar no escritório.
-3.  **Processamento:** Acompanhe o progresso enquanto a IA:
-    *   Lê e interpreta os endereços.
-    *   Analisa riscos de segurança dos bairros.
-    *   Aplica a clusterização e ordenação.
-4.  **Resultado:** Visualize o itinerário detalhado, avisos de risco e links diretos para o Google Maps.
-
-## 📋 Formato da Planilha
-
-Para melhores resultados, sua planilha deve conter:
-
-| Nome           | Endereço                          | Obs              | HorarioAbertura |
-| :---           | :---                              | :---             | :---            |
-| Cliente A      | Av. Paulista, 1000 - SP           | Entregar na doca | 08:00           |
-| Cliente B      | Rua Augusta, 500 - SP             | Falar com João   | 09:00           |
+1.  **Upload:** Carregue um arquivo `.xlsx` ou `.csv` contendo as colunas: `Nome`, `Endereço`, `Setor`, `Faturamento`, `HorarioAbertura`.
+2.  **Análise:** Utilize o **Módulo de Análise** para ver a distribuição por setor e a segmentação automática por IA.
+3.  **Configuração:** Defina parâmetros de rota (início, fim, almoço).
+4.  **Resultado:** Receba um itinerário otimizado com previsão do tempo hora-a-hora, riscos e saúde dos equipamentos.
 
 ---
 

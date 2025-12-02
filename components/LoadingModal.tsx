@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const TRIVIA = [
+const LOGISTICS_TRIVIA = [
   "Você sabia? Otimizar rotas pode economizar até 30% de combustível e tempo.",
   "O Problema do Caixeiro Viajante (TSP) é um dos problemas matemáticos mais famosos da computação.",
   "O Google Maps cobre mais de 99% do mundo habitado, totalizando mais de 60 milhões de quilômetros de estradas.",
@@ -10,10 +10,28 @@ const TRIVIA = [
   "Sua rota está sendo calculada considerando horários de pico e janelas de atendimento."
 ];
 
-const LoadingModal: React.FC = () => {
+const TV_TRIVIA = [
+  "Friends: A estátua do cachorro branco de Joey pertencia originalmente a Jennifer Aniston, que ganhou de presente de boa sorte.",
+  "The Sopranos: Em 'Pine Barrens', Paulie e Christopher ficam perdidos na neve, episódio dirigido por Steve Buscemi.",
+  "Stranger Things: Mais de 1.200 crianças fizeram testes para os papéis principais antes do elenco final ser escolhido.",
+  "The Last of Us: O fungo Cordyceps é real, mas na vida real ele afeta principalmente insetos, não humanos (ainda!).",
+  "Friends: O elenco principal negociava seus salários em conjunto, chegando a ganhar US$ 1 milhão por episódio na última temporada.",
+  "The Sopranos: A cena final com o corte abrupto para preto (Cut to Black) ainda é uma das mais debatidas da história da TV.",
+  "Stranger Things: Os criadores se inspiraram em Stephen King e Steven Spielberg, usando fontes e estéticas dos anos 80.",
+  "The Last of Us: Ellie é imune porque o fungo em seu cérebro sofreu uma mutação desde o nascimento.",
+  "Friends: A moldura dourada no olho mágico da porta de Monica era originalmente um espelho que quebrou."
+];
+
+interface LoadingModalProps {
+    type?: 'route' | 'bus';
+}
+
+const LoadingModal: React.FC<LoadingModalProps> = ({ type = 'route' }) => {
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState("Iniciando...");
   const [triviaIndex, setTriviaIndex] = useState(0);
+
+  const activeTrivia = type === 'bus' ? TV_TRIVIA : LOGISTICS_TRIVIA;
 
   // Simula o progresso com fases distintas para parecer mais realista
   useEffect(() => {
@@ -23,22 +41,18 @@ const LoadingModal: React.FC = () => {
         let next = prev;
 
         // Fase 1: Análise Inicial (0-25%) - Rápida
-        // Simula leitura do Excel e identificação de coordenadas
         if (prev < 25) {
            increment = 1.5; 
         }
         // Fase 2: Processamento AI / Segurança (25-60%) - Média
-        // Simula a "pensada" do Gemini sobre riscos e agrupamentos
         else if (prev < 60) {
            increment = 0.4; 
         }
         // Fase 3: Otimização (60-85%) - Lenta
-        // Simula o cálculo matemático de distâncias e ordenação
         else if (prev < 85) {
            increment = 0.2; 
         }
         // Fase 4: Finalização (85-95%) - Muito Lenta
-        // Aguardando o retorno final do JSON
         else if (prev < 95) {
            increment = 0.05; 
         }
@@ -49,26 +63,33 @@ const LoadingModal: React.FC = () => {
 
         next = prev + increment;
         
-        // Atualiza o texto baseado na porcentagem atual
-        if (next < 25) setStatusText("Lendo lista de endereços e prioridades...");
-        else if (next < 50) setStatusText("Analisando riscos de segurança e geolocalização...");
-        else if (next < 75) setStatusText("Calculando distâncias e agrupando visitas...");
-        else setStatusText("Finalizando roteiro e gerando horários...");
+        // Atualiza o texto baseado na porcentagem atual e no TIPO
+        if (type === 'route') {
+            if (next < 25) setStatusText("Lendo lista de endereços e prioridades...");
+            else if (next < 50) setStatusText("Analisando riscos de segurança e geolocalização...");
+            else if (next < 75) setStatusText("Calculando distâncias e agrupando visitas...");
+            else setStatusText("Finalizando roteiro e gerando horários...");
+        } else {
+            if (next < 25) setStatusText("Lendo endereços dos clientes...");
+            else if (next < 50) setStatusText("Consultando base de transporte público...");
+            else if (next < 75) setStatusText("Calculando distâncias de caminhada (300m)...");
+            else setStatusText("Atualizando endereços na planilha...");
+        }
 
         return next;
       });
     }, 100); // Atualiza a cada 100ms
 
     return () => clearInterval(interval);
-  }, []);
+  }, [type]);
 
   // Rotaciona curiosidades a cada 5 segundos
   useEffect(() => {
     const interval = setInterval(() => {
-      setTriviaIndex((prev) => (prev + 1) % TRIVIA.length);
+      setTriviaIndex((prev) => (prev + 1) % activeTrivia.length);
     }, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeTrivia]);
 
   // Animação de "pulo" do Dino (toggle frame)
   const [legFrame, setLegFrame] = useState(0);
@@ -82,7 +103,9 @@ const LoadingModal: React.FC = () => {
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8 relative overflow-hidden">
         
         <div className="text-center mb-8">
-          <h3 className="text-2xl font-bold text-gray-800 mb-1">Otimizando sua Rota</h3>
+          <h3 className="text-2xl font-bold text-gray-800 mb-1">
+              {type === 'bus' ? 'Localizando Pontos de Ônibus' : 'Otimizando sua Rota'}
+          </h3>
           <p className="text-blue-600 text-sm font-medium animate-pulse">{statusText}</p>
         </div>
 
@@ -138,8 +161,10 @@ const LoadingModal: React.FC = () => {
         {/* Trivia Section */}
         <div className="bg-blue-50 rounded-xl p-4 min-h-[80px] flex items-center justify-center transition-all duration-500">
              <div key={triviaIndex} className="text-center animate-fade-in">
-                 <span className="text-blue-500 text-xs font-bold uppercase tracking-wider block mb-1">Curiosidade</span>
-                 <p className="text-gray-700 text-sm font-medium">{TRIVIA[triviaIndex]}</p>
+                 <span className="text-blue-500 text-xs font-bold uppercase tracking-wider block mb-1">
+                     {type === 'bus' ? 'Curiosidade Geek/TV' : 'Curiosidade Logística'}
+                 </span>
+                 <p className="text-gray-700 text-sm font-medium">{activeTrivia[triviaIndex]}</p>
              </div>
         </div>
 

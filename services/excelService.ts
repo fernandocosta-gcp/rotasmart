@@ -87,6 +87,14 @@ const generateMockPOSData = (seed: string): POSHealthData[] => {
     return machines;
 };
 
+// Helper to generate mock sales data if columns are missing
+const generateMockSalesData = () => {
+    const days = ['Segunda', 'Sexta', 'Sábado', 'Sábado', 'Sábado', 'Domingo'];
+    const sales = Math.floor(Math.random() * 5000) + 1200; // 1200 to 6200
+    const bestDay = days[Math.floor(Math.random() * days.length)];
+    return { sales, bestDay };
+};
+
 export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
   return new Promise((resolve, reject) => {
     if (!window.XLSX) {
@@ -139,6 +147,16 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
         let neighborIdx = findIdx(['bairro', 'neighborhood', 'distrito']);
         let cityIdx = findIdx(['município', 'municipio', 'cidade', 'city']);
         
+        // Optional columns
+        let obsIdx = findIdx(['obs', 'nota', 'comentário', 'observacoes', 'notes']);
+        let sectorIdx = findIdx(['setor', 'segmento', 'categoria', 'ramo']);
+        let openIdx = findIdx(['abertura', 'inicio', 'abre', 'open']);
+        let closeIdx = findIdx(['fechamento', 'fim', 'fecha', 'encerra', 'close']);
+
+        // Analytics Columns Detection
+        let salesIdx = findIdx(['média', 'vendas', 'faturamento', 'receita', 'average']);
+        let bestDayIdx = findIdx(['melhor dia', 'pico', 'best day']);
+
         // --- FALLBACK STRATEGY ---
         let dataRows = rows;
         
@@ -156,12 +174,6 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
              addrIdx = 1;
              // Do NOT slice, because row 0 might be the first client
         }
-        
-        // Optional columns
-        let obsIdx = findIdx(['obs', 'nota', 'comentário', 'observacoes', 'notes']);
-        let sectorIdx = findIdx(['setor', 'segmento', 'categoria', 'ramo']);
-        let openIdx = findIdx(['abertura', 'inicio', 'abre', 'open']);
-        let closeIdx = findIdx(['fechamento', 'fim', 'fecha', 'encerra', 'close']);
 
         const formattedData: RawSheetRow[] = dataRows.map((row: any[]): RawSheetRow | null => {
           if (!row || row.length === 0) return null;
@@ -174,6 +186,17 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
 
           const name = rawName ? String(rawName).trim() : 'Sem Nome';
 
+          // Extract or Mock Analytics Data
+          let avgSales = (salesIdx !== -1 && row[salesIdx]) ? parseFloat(row[salesIdx]) : 0;
+          let bestDay = (bestDayIdx !== -1 && row[bestDayIdx]) ? String(row[bestDayIdx]).trim() : '';
+          
+          // If no data found, generate Mock for demonstration purposes
+          if (avgSales === 0 || bestDay === '') {
+              const mock = generateMockSalesData();
+              if(avgSales === 0) avgSales = mock.sales;
+              if(bestDay === '') bestDay = mock.bestDay;
+          }
+
           return {
             id: generateUUID(),
             Nome: name,
@@ -185,7 +208,9 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
             HorarioAbertura: (openIdx !== -1) ? formatExcelTime(row[openIdx]) : undefined,
             HorarioFechamento: (closeIdx !== -1) ? formatExcelTime(row[closeIdx]) : undefined,
             priority: 'normal',
-            posData: undefined // Will be merged later
+            posData: undefined, // Will be merged later
+            AverageSales: avgSales,
+            BestDay: bestDay
           };
         }).filter((item): item is RawSheetRow => item !== null);
         

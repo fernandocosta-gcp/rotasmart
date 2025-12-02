@@ -38,6 +38,12 @@ export interface RawSheetRow {
   customParkingInfo?: string; 
   posData?: POSHealthData[]; // Changed from single object to Array
   nearbyBusStop?: string; // New field for pre-route check
+  busStatus?: 'found' | 'not_found'; // Status da verificação de ponto de ônibus
+  
+  // New Analytics Fields
+  AverageSales?: number; // Média de vendas (R$)
+  BestDay?: string; // Dia da semana (Sábado, Sexta, etc)
+  
   [key: string]: any;
 }
 
