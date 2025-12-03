@@ -1,3 +1,4 @@
+
 export enum EstablishmentType {
   CLIENT = 'Cliente',
   OFFICE = 'Escritório',
@@ -113,3 +114,41 @@ export interface DailyItinerary {
 }
 
 export type MultiDayPlan = DailyItinerary[];
+
+// --- TEAM MANAGEMENT INTERFACES ---
+
+export interface WorkSchedule {
+  dayOfWeek: 'Segunda' | 'Terça' | 'Quarta' | 'Quinta' | 'Sexta' | 'Sábado' | 'Domingo';
+  startTime: string; // "08:00"
+  endTime: string;   // "18:00"
+  isDayOff: boolean;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  isOnVacation: boolean;
+  schedule: WorkSchedule[];
+  // Novos campos de cadastro
+  phoneNumber?: string;
+  usesCar: boolean;
+  rotationDay: 'Nenhum' | 'Segunda-feira' | 'Terça-feira' | 'Quarta-feira' | 'Quinta-feira' | 'Sexta-feira';
+  // Novos campos de Logística
+  preferredStartLocation?: string;
+  preferredEndLocation?: string;
+  returnToStart?: boolean; // Checkbox para retorno igual partida
+}
+
+export interface ServiceRegion {
+  city: string;
+  neighborhood: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  isActive: boolean;
+  maxActivitiesPerRoute?: number; // Novo Campo
+  regions: ServiceRegion[];
+  members: TeamMember[];
+}

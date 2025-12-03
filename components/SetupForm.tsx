@@ -320,14 +320,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       setError('Por favor, faça upload de uma lista de locais.');
       return;
     }
-    if (!prefs.useCurrentLocation && !prefs.startLocation) {
-      setError('Defina um local de partida ou use sua localização atual.');
-      return;
-    }
-    if (!prefs.returnToStart && !prefs.endLocation) {
-      setError('Defina um local de chegada ou marque "Retornar ao início".');
-      return;
-    }
+    
+    // VALIDATIONS REMOVED FOR START/END LOCATION AS REQUESTED
+    
     if (prefs.departureTime >= prefs.returnTime) {
         setError('O horário de retorno deve ser posterior ao horário de saída.');
         return;
@@ -370,6 +365,37 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       if (issues.length === 0) return "Funcional.";
       
       return issues.join(' ');
+  };
+
+  // Helper para calcular etiqueta de prioridade operacional
+  const getOperationalPriorityBadge = (posData: POSHealthData[]) => {
+      const total = posData.length;
+      if (total === 0) return null;
+      
+      const operativeCount = posData.filter(d => getHealthStatus(d).label === 'OPERATIVO').length;
+      const score = Math.round((operativeCount / total) * 100);
+
+      if (score <= 25) {
+        return (
+          <span className="text-[10px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold">
+            Alta Prioridade
+          </span>
+        );
+      } else if (score <= 50) {
+        return (
+          <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded font-bold">
+            Média Prioridade
+          </span>
+        );
+      } else if (score <= 75) {
+        return (
+          <span className="text-[10px] bg-green-100 text-green-700 border border-green-200 px-1.5 py-0.5 rounded font-bold">
+            Baixa Prioridade
+          </span>
+        );
+      }
+      // Acima de 75% não exibe etiqueta (considerado saudável/padrão)
+      return null;
   };
 
   // Calcula estatísticas globais
@@ -484,11 +510,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
 
       {/* Show Analysis Modal */}
       {showAnalysisModal && <AnalysisModal data={sheetData} onClose={() => setShowAnalysisModal(false)} />}
-
-      <div className="mb-6 text-center">
-        <h2 className="text-3xl font-bold text-gray-800 mb-2">Planejar Rotas</h2>
-        <p className="text-gray-500">Configure sua jornada e revise seus clientes.</p>
-      </div>
 
       <form onSubmit={handleSubmit} className="space-y-8">
         
@@ -678,6 +699,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                 )}
                                                 
                                                 <div className="flex items-center gap-2 mt-1">
+                                                    {/* Operational Priority Badge */}
+                                                    {hasPos && getOperationalPriorityBadge(row.posData!)}
+
                                                     <span className={`text-xs px-2 py-0.5 rounded-full border ${hasPos ? 'bg-gray-100 text-gray-600 border-gray-200' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
                                                         {hasPos ? row.posData!.length : 0} POS
                                                     </span>
@@ -788,59 +812,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     className="w-full px-2 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                                 />
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                        <label className="block text-sm font-semibold text-gray-700 mb-2">Defina ponto de partida e retorno</label>
-                        
-                        {/* Start Location */}
-                        <div className="mb-3">
-                            <label className="block text-xs text-gray-500 mb-1">Partida</label>
-                            <div className="flex gap-2">
-                                <input 
-                                    type="text" 
-                                    placeholder="Endereço de partida"
-                                    value={prefs.startLocation}
-                                    disabled={prefs.useCurrentLocation}
-                                    onChange={(e) => setPrefs({...prefs, startLocation: e.target.value})}
-                                    className={`w-full px-3 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none placeholder-gray-400 ${prefs.useCurrentLocation ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setPrefs(prev => ({...prev, useCurrentLocation: !prev.useCurrentLocation}))}
-                                    className={`p-2 rounded-lg border flex-shrink-0 ${prefs.useCurrentLocation ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-300'}`}
-                                    title="Usar atual"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Return Location Toggle & Input */}
-                        <div>
-                             <label className="flex items-center space-x-2 cursor-pointer mb-2">
-                                <input 
-                                    type="checkbox" 
-                                    checked={prefs.returnToStart} 
-                                    onChange={(e) => setPrefs({...prefs, returnToStart: e.target.checked})} 
-                                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                                />
-                                <span className="text-xs text-gray-600 font-medium">Retornar ao mesmo local</span>
-                            </label>
-
-                            {!prefs.returnToStart && (
-                                <div className="animate-fade-in-up">
-                                    <label className="block text-xs text-gray-500 mb-1">Chegada</label>
-                                    <input 
-                                        type="text" 
-                                        placeholder="Endereço de chegada"
-                                        value={prefs.endLocation}
-                                        onChange={(e) => setPrefs({...prefs, endLocation: e.target.value})}
-                                        className="w-full px-3 py-2 text-sm rounded-lg border border-gray-600 bg-gray-700 text-white focus:ring-2 focus:ring-blue-500 outline-none placeholder-gray-400"
-                                    />
-                                </div>
-                            )}
                         </div>
                     </div>
 

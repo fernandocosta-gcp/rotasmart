@@ -3,6 +3,61 @@ import { RawSheetRow, UserPreferences, MultiDayPlan } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// Nova função para obter coordenadas de Bairros/Cidades em lote para o Mapa de Calor
+export const getRegionCoordinates = async (regions: string[]): Promise<Record<string, { lat: number, lng: number }>> => {
+  if (regions.length === 0) return {};
+
+  // Remove duplicates and limit batch size if necessary (handling reasonably sized lists)
+  const uniqueRegions = Array.from(new Set(regions));
+  
+  const prompt = `
+    You are a geo-coding assistant.
+    I have a list of regions (Neighborhoods/Cities).
+    For each region, find the central Latitude and Longitude coordinates using Google Maps.
+
+    REGIONS LIST:
+    ${uniqueRegions.join('\n')}
+
+    RETURN:
+    A single JSON object where:
+    - Keys are exactly the region strings provided.
+    - Values are objects with "lat" and "lng" (numbers).
+    - If not found, use a central coordinate for the city inferred or return null.
+
+    Example Output format:
+    {
+      "Pinheiros, São Paulo": { "lat": -23.561, "lng": -46.685 },
+      "Centro, Rio de Janeiro": { "lat": -22.906, "lng": -43.172 }
+    }
+    
+    Return ONLY VALID JSON.
+  `;
+
+  try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          tools: [{ googleMaps: {} }],
+        }
+      });
+      
+      let text = response.text;
+      if(!text) return {};
+
+      // Manual JSON extraction
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+          text = jsonMatch[0];
+      }
+
+      return JSON.parse(text);
+  } catch (e) {
+      console.error("Geocoding failed", e);
+      throw new Error("Falha ao geocodificar regiões.");
+  }
+};
+
 // Nova função para verificar ônibus na fase de Setup
 export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<string, string>> => {
   // Filtra apenas linhas com endereço válido
