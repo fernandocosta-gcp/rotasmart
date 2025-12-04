@@ -142,7 +142,7 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-4">
+    <div className="max-w-[1800px] mx-auto p-6">
       
       <div className="flex justify-between items-center mb-6">
          <h2 className="text-2xl font-bold text-gray-900">Plano de Rotas</h2>
@@ -162,240 +162,147 @@ const Itinerary: React.FC<ItineraryProps> = ({ plan, onReset }) => {
                   : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
               }`}
             >
-              {day.dayLabel} <span className="text-xs opacity-75 ml-1">({day.date})</span>
+              {day.dayLabel} <span className="text-xs opacity-75 ml-1">({day.stops.length})</span>
             </button>
           ))}
         </div>
       )}
 
-      {/* Active Day Summary */}
-      <div className="bg-white rounded-2xl shadow-lg p-6 mb-8 border border-gray-200">
-        <div className="flex flex-col gap-4">
-            <div>
-                <div className="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-4">
-                    <div>
-                        <div className="flex items-center gap-2 mb-2">
-                            <h3 className="text-xl font-bold text-gray-900">{currentDay.dayLabel} - {currentDay.date}</h3>
-                        </div>
-                        <p className="text-gray-600 text-sm">{currentDay.summary}</p>
-                    </div>
-                    
-                    {/* Bulk Action: Download ICS */}
-                    <button 
-                        onClick={downloadDayICS}
-                        className="flex items-center justify-center px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-semibold transition-colors border border-indigo-200 shadow-sm"
-                        title="Baixar arquivo de agenda para Outlook, Apple Calendar, etc."
-                    >
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                        Baixar Agenda do Dia (.ics)
-                    </button>
-                </div>
-                
-                {/* Stats Grid - Responsive */}
-                <div className="flex flex-wrap gap-3 text-gray-700 text-sm">
-                    {/* Tempo */}
-                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
-                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                        <span className="font-semibold whitespace-nowrap">{currentDay.totalTimeHours}</span>
-                    </div>
-                    {/* Distância */}
-                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
-                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
-                        <span className="font-semibold whitespace-nowrap">{currentDay.totalDistanceKm}</span>
-                    </div>
-                    {/* Paradas */}
-                    <div className="flex items-center bg-blue-50 px-3 py-2 rounded-lg border border-blue-100 flex-grow md:flex-grow-0">
-                        <svg className="w-4 h-4 mr-2 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                        <span className="font-semibold whitespace-nowrap">{currentDay.stops.length} Paradas</span>
-                    </div>
-
-                    {/* Divisor Visual para Custos */}
-                    <div className="hidden md:block w-px bg-gray-300 mx-2 h-8 self-center"></div>
-
-                    {/* Combustível Estimado */}
-                    <div className="flex items-center bg-green-50 px-3 py-2 rounded-lg border border-green-100 flex-grow md:flex-grow-0" title="Estimativa para Carro 1.0 Gasolina (R$6/L)">
-                        <svg className="w-4 h-4 mr-2 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        <span className="font-semibold text-green-800 whitespace-nowrap">{currentDay.estimatedFuelCost || 'R$ --'}</span>
-                    </div>
-
-                    {/* Estacionamento Estimado */}
-                    <div className="flex items-center bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100 flex-grow md:flex-grow-0">
-                        <span className="mr-2 text-lg leading-none">🅿️</span>
-                        <span className="font-semibold text-indigo-800 whitespace-nowrap">{currentDay.estimatedParkingCost || 'R$ --'}</span>
-                    </div>
-                </div>
+      {/* Summary Card */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
+            <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
             </div>
+            <div>
+                <span className="block text-xs font-bold text-gray-500 uppercase">Distância Total</span>
+                <span className="text-xl font-bold text-gray-800">{currentDay.totalDistanceKm}</span>
+            </div>
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
+            <div className="p-3 bg-purple-50 rounded-lg text-purple-600">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+            <div>
+                <span className="block text-xs font-bold text-gray-500 uppercase">Tempo Estimado</span>
+                <span className="text-xl font-bold text-gray-800">{currentDay.totalTimeHours}</span>
+            </div>
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
+            <div className="p-3 bg-green-50 rounded-lg text-green-600">
+                 <span className="text-xl font-bold">R$</span>
+            </div>
+            <div>
+                <span className="block text-xs font-bold text-gray-500 uppercase">Custo Combustível</span>
+                <span className="text-xl font-bold text-gray-800">{currentDay.estimatedFuelCost}</span>
+            </div>
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
+             <button 
+                onClick={downloadDayICS}
+                className="w-full h-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-black text-white rounded-lg transition-colors"
+             >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                <span className="font-bold">Baixar Agenda (.ics)</span>
+             </button>
         </div>
       </div>
 
       {/* Timeline */}
-      <div className="relative border-l-4 border-blue-100 ml-4 md:ml-6 space-y-8 pb-8">
+      <div className="relative border-l-2 border-gray-200 ml-4 md:ml-6 space-y-8">
         {currentDay.stops.map((stop, index) => {
-          // Check if there are any risks
-          const hasRisk = stop.risks.flood || stop.risks.towing || stop.risks.security;
-          
-          // Helper para texto do ônibus
-          const busInfo = stop.nearbyBusStop || "Nenhum ponto de ônibus identificado nas imediações.";
-          const hasBus = !busInfo.toLowerCase().includes("nenhum") && !busInfo.toLowerCase().includes("não identificad");
-
-          return (
-            <div key={index} className="relative pl-6 md:pl-8">
-              {/* Dot on Timeline */}
-              <div className={`absolute -left-3.5 top-6 w-7 h-7 rounded-full border-4 flex items-center justify-center z-10 ${hasRisk ? 'bg-orange-50 border-orange-500' : 'bg-white border-blue-500'}`}>
-                  {hasRisk ? (
-                      <span className="text-[10px] font-bold text-orange-600">!</span>
-                  ) : (
-                      <span className="text-xs font-bold text-blue-700">{stop.order}</span>
-                  )}
-              </div>
-
-              {/* Card */}
-              <div className={`bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow p-5 border ${hasRisk ? 'border-orange-200' : 'border-gray-100'}`}>
-                <div className="flex flex-col md:flex-row justify-between md:items-center mb-3">
-                  <div className="flex items-center gap-3 mb-2 md:mb-0">
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide flex items-center gap-2 border ${getTypeColor(stop.type)}`}>
-                          {getTypeIcon(stop.type)}
-                          {stop.type}
-                      </span>
-                      <h3 className="text-lg font-bold text-gray-800">{stop.name}</h3>
-                  </div>
-                  <div className="text-right min-w-[100px]">
-                      <div className="text-2xl font-bold text-blue-600">{stop.estimatedArrival}</div>
-                      <div className="text-xs text-gray-500">Duração: {stop.durationMinutes} min</div>
-                  </div>
-                </div>
-
-                <div className="mb-4">
-                    <p className="text-gray-600 text-sm flex items-start">
-                        <svg className="w-4 h-4 mr-1 mt-0.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                        {stop.address}
-                    </p>
+            const isRisk = stop.risks.security || stop.risks.flood || stop.risks.towing;
+            return (
+                <div key={stop.id} className="relative pl-8 md:pl-12">
+                    {/* Time Bubble */}
+                    <div className="absolute -left-[9px] md:-left-[10px] top-0 bg-white border-2 border-blue-500 w-5 h-5 rounded-full z-10"></div>
                     
-                    {/* BUS STOP INFO (Always Rendered) */}
-                    <div className={`flex items-center mt-2 text-xs font-medium px-2 py-1.5 rounded w-fit ml-5 ${
-                        hasBus 
-                        ? "bg-blue-50 text-blue-700 border border-blue-200" 
-                        : "bg-gray-100 text-gray-500 border border-gray-200"
-                    }`}>
-                        {hasBus ? (
-                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M5 10a1 1 0 011-1h12a1 1 0 011 1v7a1 1 0 01-1 1h-2a1 1 0 01-1-1v-1H8v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
-                                <path d="M5 10V7a2 2 0 012-2h10a2 2 0 012 2v3" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
-                                <circle cx="7.5" cy="14.5" r="1.5" fill="currentColor" />
-                                <circle cx="16.5" cy="14.5" r="1.5" fill="currentColor" />
-                            </svg>
-                        ) : (
-                            <svg className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
-                        )}
-                        <span>{busInfo}</span>
-                    </div>
-                </div>
-
-                {/* Weather Section (NEW) */}
-                {stop.weather && (
-                    <div className={`mb-4 p-3 rounded-lg border flex items-center gap-4 ${stop.weather.isStormy ? 'bg-red-50 border-red-200' : 'bg-sky-50 border-sky-100'}`}>
-                        <div className="flex items-center gap-2">
-                            {getWeatherIcon(stop.weather.condition, stop.weather.isStormy)}
-                            <div className="flex flex-col">
-                                <span className="font-bold text-gray-800 text-sm leading-tight">{stop.weather.temp}</span>
-                                <span className="text-xs text-gray-600">{stop.weather.condition}</span>
+                    <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3">
+                            <div className="flex items-center gap-3 mb-2 md:mb-0">
+                                <span className="font-mono text-lg font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">{stop.estimatedArrival}</span>
+                                <h3 className="text-lg font-bold text-gray-800">{stop.name}</h3>
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold border flex items-center gap-1 ${getTypeColor(stop.type)}`}>
+                                    {getTypeIcon(stop.type)}
+                                    {stop.type}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                {stop.weather && (
+                                    <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${stop.weather.isStormy ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700'}`}>
+                                        {getWeatherIcon(stop.weather.condition, stop.weather.isStormy)}
+                                        <span>{stop.weather.temp}</span>
+                                        <span className="text-xs opacity-75">({stop.weather.chanceOfRain} chuva)</span>
+                                    </div>
+                                )}
                             </div>
                         </div>
-                        <div className="h-8 w-px bg-gray-300"></div>
-                        <div className="text-xs text-gray-700">
-                             <div>Chuva: <strong>{stop.weather.chanceOfRain}</strong></div>
-                             {stop.weather.isStormy && (
-                                 <div className="text-red-700 font-bold uppercase mt-1 flex items-center">
-                                     ⚠️ Alerta de Tempestade
-                                 </div>
-                             )}
-                        </div>
-                    </div>
-                )}
 
-                {/* Metadata Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
-                  {stop.phoneNumber && (
-                      <div className="flex items-center text-gray-600">
-                          <svg className="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path></svg>
-                          {stop.phoneNumber}
-                      </div>
-                  )}
-                  {stop.parkingSuggestion && (
-                      <div className="flex items-center text-indigo-600 bg-indigo-50 p-2 rounded">
-                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                          <span className="font-medium">Estacionamento: </span> <span className="ml-1 truncate">{stop.parkingSuggestion}</span>
-                      </div>
-                  )}
-                </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div>
+                                <div className="flex items-start gap-2 mb-2">
+                                    <svg className="w-5 h-5 text-gray-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                    <p className="text-gray-600 text-sm">{stop.address}</p>
+                                </div>
+                                
+                                {stop.nearbyBusStop && !stop.nearbyBusStop.toLowerCase().includes('nenhum') && (
+                                     <div className="flex items-start gap-2 mb-2 ml-1">
+                                         <span className="text-lg">🚌</span>
+                                         <p className="text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-100 w-fit">
+                                            {stop.nearbyBusStop}
+                                         </p>
+                                     </div>
+                                )}
 
-                {/* Risks/Warnings Enhanced */}
-                {hasRisk && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4 flex items-start animate-fade-in-up">
-                        <div className="flex-shrink-0 mr-3">
-                           {stop.risks.security ? (
-                              <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                           ) : (
-                              <svg className="w-6 h-6 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                           )}
-                        </div>
-                        <div className="text-sm text-red-800 flex-1">
-                            <p className="font-bold mb-1">Análise de Risco:</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                {stop.risks.security && (
-                                  <span className="flex items-center text-xs bg-red-100 text-red-800 px-2 py-1 rounded font-medium">
-                                     🛡️ Risco de Segurança / Roubo
-                                  </span>
-                                )}
-                                {stop.risks.flood && (
-                                  <span className="flex items-center text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium">
-                                     💧 Área de Alagamento
-                                  </span>
-                                )}
-                                {stop.risks.towing && (
-                                  <span className="flex items-center text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded font-medium">
-                                     🚗 Risco de Guincho/Multa
-                                  </span>
+                                {stop.notes && (
+                                    <div className="flex items-start gap-2 mt-2">
+                                        <svg className="w-5 h-5 text-gray-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                        <p className="text-gray-500 text-sm italic">{stop.notes}</p>
+                                    </div>
                                 )}
                             </div>
-                            {stop.risks.description && (
-                                <p className="mt-2 text-gray-700 italic border-l-2 border-red-300 pl-2">
-                                  "{stop.risks.description}"
-                                </p>
-                            )}
+
+                            <div className="space-y-2">
+                                {isRisk && (
+                                    <div className="bg-red-50 border border-red-100 p-3 rounded-lg">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                            <span className="text-xs font-bold text-red-700 uppercase">Alertas de Risco</span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 text-xs">
+                                            {stop.risks.security && <span className="bg-red-200 text-red-800 px-2 py-0.5 rounded">Segurança</span>}
+                                            {stop.risks.flood && <span className="bg-blue-200 text-blue-800 px-2 py-0.5 rounded">Alagamento</span>}
+                                            {stop.risks.towing && <span className="bg-yellow-200 text-yellow-800 px-2 py-0.5 rounded">Guincho</span>}
+                                        </div>
+                                        {stop.risks.description && <p className="text-xs text-red-800 mt-1">{stop.risks.description}</p>}
+                                    </div>
+                                )}
+
+                                <div className="flex gap-2 justify-end mt-4">
+                                     <a 
+                                        href={getGoogleCalendarLink(stop, currentDay.date)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                                     >
+                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                         Add Calendar
+                                     </a>
+                                     <a 
+                                        href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(stop.address)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+                                     >
+                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                         Navegar
+                                     </a>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                )}
-
-                <div className="flex justify-between items-center pt-3 border-t border-gray-100">
-                    <span className="text-xs text-gray-400 italic mr-2 truncate flex-1">{stop.notes}</span>
-                    <div className="flex gap-2">
-                        {/* Google Calendar Action */}
-                        <a 
-                            href={getGoogleCalendarLink(stop, currentDay.date)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-100 border border-gray-200 transition-colors"
-                        >
-                            <svg className="w-4 h-4 mr-1.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                            Agendar
-                        </a>
-
-                        {/* Maps Action */}
-                        <a 
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 text-sm font-semibold rounded-lg hover:bg-blue-100 border border-blue-200 transition-colors"
-                        >
-                            Maps
-                            <svg className="w-4 h-4 ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                        </a>
-                    </div>
                 </div>
-              </div>
-            </div>
-          );
+            );
         })}
       </div>
     </div>

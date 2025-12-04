@@ -8,7 +8,7 @@ export enum EstablishmentType {
   OTHER = 'Outro'
 }
 
-export type PriorityLevel = 'normal' | 'high' | 'lunch' | 'end_of_day';
+export type PriorityLevel = 'normal' | 'high' | 'medium' | 'lunch' | 'end_of_day';
 
 export interface POSHealthData {
   machineId: string; // Id Máquina
@@ -36,6 +36,7 @@ export interface RawSheetRow {
   HorarioAbertura?: string;
   HorarioFechamento?: string;
   priority: PriorityLevel;
+  prioritySource?: 'file' | 'auto'; // Rastreia se veio do arquivo ou calculado
   customParkingInfo?: string; 
   posData?: POSHealthData[]; // Changed from single object to Array
   nearbyBusStop?: string; // New field for pre-route check
@@ -45,6 +46,11 @@ export interface RawSheetRow {
   AverageSales?: number; // Média de vendas (R$)
   BestDay?: string; // Dia da semana (Sábado, Sexta, etc)
   
+  // New Distribution Field
+  assignedTeamId?: string; // ID da equipe atribuída via IA
+  assignedMemberId?: string; // ID do membro da equipe atribuído via IA
+  distributionReason?: string; // Explicação da IA para a atribuição
+
   [key: string]: any;
 }
 
@@ -124,6 +130,8 @@ export interface WorkSchedule {
   isDayOff: boolean;
 }
 
+export type TransportMode = 'public_transport' | 'bicycle' | 'walking' | 'motorcycle' | 'car';
+
 export interface TeamMember {
   id: string;
   name: string;
@@ -131,12 +139,15 @@ export interface TeamMember {
   schedule: WorkSchedule[];
   // Novos campos de cadastro
   phoneNumber?: string;
-  usesCar: boolean;
+  usesCar: boolean; // Mantido para compatibilidade, mas derivado de transportMode na UI
+  transportMode?: TransportMode; // Novo campo expandido
   rotationDay: 'Nenhum' | 'Segunda-feira' | 'Terça-feira' | 'Quarta-feira' | 'Quinta-feira' | 'Sexta-feira';
   // Novos campos de Logística
   preferredStartLocation?: string;
   preferredEndLocation?: string;
   returnToStart?: boolean; // Checkbox para retorno igual partida
+  // Novo campo de Carteira
+  portfolio?: string[]; // Lista de nomes de empresas vinculadas
 }
 
 export interface ServiceRegion {

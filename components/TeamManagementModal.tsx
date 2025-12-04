@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Team, TeamMember, WorkSchedule, ServiceRegion } from '../types';
+import { Team, TeamMember, WorkSchedule, ServiceRegion, TransportMode } from '../types';
 import CoverageHeatmapModal from './CoverageHeatmapModal';
 
 interface TeamManagementModalProps {
   onClose: () => void;
+  teams: Team[];
+  setTeams: React.Dispatch<React.SetStateAction<Team[]>>;
 }
 
 const DEFAULT_SCHEDULE: WorkSchedule[] = [
@@ -18,6 +20,14 @@ const DEFAULT_SCHEDULE: WorkSchedule[] = [
 
 const ROTATION_DAYS = ['Nenhum', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira'];
 
+const TRANSPORT_OPTIONS: { value: TransportMode; label: string; icon: string }[] = [
+    { value: 'public_transport', label: 'Transporte Público', icon: '🚌' },
+    { value: 'walking', label: 'A pé', icon: '🚶' },
+    { value: 'bicycle', label: 'Bicicleta', icon: '🚲' },
+    { value: 'motorcycle', label: 'Moto', icon: '🏍️' },
+    { value: 'car', label: 'Veículo Próprio', icon: '🚗' },
+];
+
 // Helper seguro para IDs
 const generateUUID = () => {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -26,20 +36,22 @@ const generateUUID = () => {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
 
-const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) => {
-    const [teams, setTeams] = useState<Team[]>([]);
+const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose, teams, setTeams }) => {
     const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
     const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     
+    // State for Portfolio Text Area (Temporary holder while editing)
+    const [tempPortfolioText, setTempPortfolioText] = useState("");
+
     // State for Heatmap Modal
     const [showHeatmap, setShowHeatmap] = useState(false);
 
-    // Estado para guardar dados de importação temporariamente enquanto aguarda confirmação
+    // Estado para guardar dados de importação temporariamente
     const [pendingImportData, setPendingImportData] = useState<Team[] | null>(null);
     const [importError, setImportError] = useState<string | null>(null);
 
-    // Estado para Modal de Confirmação Customizado (Substitui window.confirm)
+    // Estado para Modal de Confirmação Customizado
     const [confirmModal, setConfirmModal] = useState<{
         isOpen: boolean;
         type: 'team' | 'member' | 'import';
@@ -48,23 +60,18 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
         message: string;
     } | null>(null);
 
-    // Persistência Local
+    const activeTeam = teams.find(t => t.id === selectedTeamId);
+
+    // Sync portfolio text when opening a member
     useEffect(() => {
-        const saved = localStorage.getItem('rotaSmart_teams');
-        if (saved) {
-            try {
-                setTeams(JSON.parse(saved));
-            } catch (e) {
-                console.error("Erro ao carregar times", e);
+        if (selectedTeamId && editingMemberId) {
+            const team = teams.find(t => t.id === selectedTeamId);
+            const member = team?.members.find(m => m.id === editingMemberId);
+            if (member) {
+                setTempPortfolioText(member.portfolio ? member.portfolio.join('\n') : '');
             }
         }
-    }, []);
-
-    useEffect(() => {
-        localStorage.setItem('rotaSmart_teams', JSON.stringify(teams));
-    }, [teams]);
-
-    const activeTeam = teams.find(t => t.id === selectedTeamId);
+    }, [editingMemberId, selectedTeamId, teams]);
 
     // --- DATA EXPORT / IMPORT ---
 
@@ -199,10 +206,12 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
             schedule: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)), // Deep copy
             phoneNumber: '',
             usesCar: false,
+            transportMode: 'public_transport',
             rotationDay: 'Nenhum',
             preferredStartLocation: '',
             preferredEndLocation: '',
-            returnToStart: true // Padrão: retornar ao início
+            returnToStart: true, // Padrão: retornar ao início
+            portfolio: [] // Inicializa carteira vazia
         };
         
         setTeams(prev => prev.map(t => {
@@ -212,6 +221,7 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
             return t;
         }));
         setEditingMemberId(newMember.id);
+        setTempPortfolioText("");
     };
 
     const requestDeleteMember = (memberId: string) => {
@@ -224,7 +234,7 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
         });
     };
 
-    // --- EXECUTE CONFIRM ACTION (Called by Custom Modal) ---
+    // --- EXECUTE CONFIRM ACTION ---
     const executeConfirmAction = () => {
         if (!confirmModal) return;
 
@@ -262,6 +272,17 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
             }
             return t;
         }));
+    };
+
+    const savePortfolio = (memberId: string) => {
+        const lines = tempPortfolioText.split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0);
+        
+        // Remove duplicates within the list
+        const unique = Array.from(new Set(lines)) as string[];
+        
+        updateMember(memberId, { portfolio: unique });
     };
 
     const updateMemberSchedule = (memberId: string, dayIndex: number, field: keyof WorkSchedule, value: any) => {
@@ -502,12 +523,18 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
                                 </div>
 
                                 <div className="space-y-4">
-                                    {activeTeam.members.map(member => (
+                                    {activeTeam.members.map(member => {
+                                        const transportMode = member.transportMode || (member.usesCar ? 'car' : 'public_transport');
+                                        const portfolioCount = member.portfolio ? member.portfolio.length : 0;
+                                        
+                                        return (
                                         <div key={member.id} className={`border rounded-xl transition-all ${editingMemberId === member.id ? 'border-blue-400 shadow-md bg-white' : 'border-gray-200 bg-gray-50'}`}>
                                             {/* Member Header (Click to Expand) */}
                                             <div 
                                                 className="p-4 flex justify-between items-center cursor-pointer group relative"
-                                                onClick={() => setEditingMemberId(editingMemberId === member.id ? null : member.id)}
+                                                onClick={() => {
+                                                    setEditingMemberId(editingMemberId === member.id ? null : member.id);
+                                                }}
                                             >
                                                 <div className="flex items-center gap-4">
                                                     {/* Avatar */}
@@ -518,18 +545,25 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
                                                     {/* Name & Active Checkbox */}
                                                     <div className="flex flex-col">
                                                         <span className="font-bold text-gray-800 text-base leading-tight">{member.name}</span>
-                                                        <div onClick={(e) => e.stopPropagation()} className="relative z-30">
-                                                            <label className="flex items-center gap-2 mt-1 cursor-pointer">
-                                                                <input 
-                                                                    type="checkbox" 
-                                                                    checked={!member.isOnVacation}
-                                                                    onChange={(e) => {
-                                                                        updateMember(member.id, { isOnVacation: !e.target.checked });
-                                                                    }}
-                                                                    className="w-4 h-4 text-green-600 rounded focus:ring-green-500 border-gray-300 cursor-pointer"
-                                                                />
-                                                                <span className="text-sm text-gray-600 select-none">Ativo</span>
-                                                            </label>
+                                                        <div className="flex items-center gap-3">
+                                                            <div onClick={(e) => e.stopPropagation()} className="relative z-30">
+                                                                <label className="flex items-center gap-2 mt-1 cursor-pointer">
+                                                                    <input 
+                                                                        type="checkbox" 
+                                                                        checked={!member.isOnVacation}
+                                                                        onChange={(e) => {
+                                                                            updateMember(member.id, { isOnVacation: !e.target.checked });
+                                                                        }}
+                                                                        className="w-4 h-4 text-green-600 rounded focus:ring-green-500 border-gray-300 cursor-pointer"
+                                                                    />
+                                                                    <span className="text-sm text-gray-600 select-none">Ativo</span>
+                                                                </label>
+                                                            </div>
+                                                            {portfolioCount > 0 && (
+                                                                <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full mt-1 border border-indigo-200">
+                                                                    {portfolioCount} Clientes na Carteira
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -596,30 +630,64 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
                                                                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
                                                             />
                                                         </div>
-                                                        <div className="col-span-1 flex items-end">
-                                                            <label className="flex items-center gap-3 cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-300 w-full hover:bg-gray-50 transition-colors h-[38px] mt-6 md:mt-0">
-                                                                <input 
-                                                                    type="checkbox" 
-                                                                    checked={member.usesCar || false}
-                                                                    onChange={(e) => updateMember(member.id, { usesCar: e.target.checked })}
-                                                                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                                                                />
-                                                                <span className="text-gray-700 font-medium text-sm">Trabalha de Carro?</span>
-                                                            </label>
+                                                        <div className="col-span-1">
+                                                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Modo de Transporte</label>
+                                                            <div className="relative">
+                                                                <select 
+                                                                    value={transportMode}
+                                                                    onChange={(e) => updateMember(member.id, { 
+                                                                        transportMode: e.target.value as TransportMode,
+                                                                        usesCar: e.target.value === 'car' // Sync legacy boolean
+                                                                    })}
+                                                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm appearance-none"
+                                                                >
+                                                                    {TRANSPORT_OPTIONS.map(opt => (
+                                                                        <option key={opt.value} value={opt.value}>
+                                                                            {opt.icon} {opt.label}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                                                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                         <div className="col-span-1">
-                                                            <label className={`block text-xs font-bold uppercase mb-1 ${member.usesCar ? 'text-gray-500' : 'text-gray-300'}`}>Dia de Rodízio</label>
+                                                            <label className={`block text-xs font-bold uppercase mb-1 ${transportMode === 'car' ? 'text-gray-500' : 'text-gray-300'}`}>Dia de Rodízio</label>
                                                             <select 
-                                                                disabled={!member.usesCar}
+                                                                disabled={transportMode !== 'car'}
                                                                 value={member.rotationDay || 'Nenhum'}
                                                                 onChange={(e) => updateMember(member.id, { rotationDay: e.target.value as any })}
-                                                                className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none ${member.usesCar ? 'bg-white border-gray-300 text-gray-800' : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'}`}
+                                                                className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none ${transportMode === 'car' ? 'bg-white border-gray-300 text-gray-800' : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'}`}
                                                             >
                                                                 {ROTATION_DAYS.map(day => (
                                                                     <option key={day} value={day}>{day}</option>
                                                                 ))}
                                                             </select>
                                                         </div>
+                                                    </div>
+
+                                                    {/* NEW PORTFOLIO SECTION */}
+                                                    <div className="mb-4 bg-indigo-50 p-4 rounded-lg border border-indigo-100">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <h4 className="text-xs font-bold text-indigo-700 uppercase flex items-center gap-1">
+                                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+                                                                Carteira de Clientes (Vínculo Fixo)
+                                                            </h4>
+                                                            <span className="text-xs text-indigo-500 font-medium">
+                                                                {tempPortfolioText.split('\n').filter(x=>x.trim()).length} / 250 empresas
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-xs text-indigo-600 mb-2">
+                                                            Cole abaixo a lista de nomes das empresas (um por linha) que este colaborador deve atender preferencialmente. Estes vínculos são aplicados automaticamente, mas o Gemini sobrescreverá a atribuição quando solicitado.
+                                                        </p>
+                                                        <textarea 
+                                                            value={tempPortfolioText}
+                                                            onChange={(e) => setTempPortfolioText(e.target.value)}
+                                                            onBlur={() => savePortfolio(member.id)}
+                                                            className="w-full h-32 p-3 text-sm font-mono border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                                                            placeholder={`Padaria do João\nFarmácia Central\nMercado Silva...`}
+                                                        />
                                                     </div>
 
                                                     {/* NEW LOCATION SECTION */}
@@ -722,7 +790,8 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose }) =>
                                                 </div>
                                             )}
                                         </div>
-                                    ))}
+                                        );
+                                    })}
 
                                     {activeTeam.members.length === 0 && (
                                         <div className="text-center py-8 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">

@@ -1,4 +1,5 @@
-import { RawSheetRow, POSHealthData } from '../types';
+
+import { RawSheetRow, POSHealthData, PriorityLevel, Team } from '../types';
 
 declare global {
   interface Window {
@@ -46,6 +47,52 @@ const formatExcelTime = (value: any): string | undefined => {
   }
 
   return String(value).trim();
+};
+
+// Helper para converter texto da planilha em PriorityLevel
+const parsePriority = (rawValue: any): PriorityLevel => {
+    if (!rawValue) return 'normal';
+    
+    const text = String(rawValue).toLowerCase().trim();
+    
+    // 1. Mapeamento Numérico Comum (1=Alta, 2=Média, 3=Baixa)
+    if (text === '1') return 'high';
+    if (text === '2') return 'medium';
+    
+    // 2. Mapeamento de termos para High (Alta Prioridade)
+    if (['alta', 'high', 'urgente', 'urgent', 'crítico', 'critico', 'importante', 'prioridade'].some(t => text.includes(t))) {
+        return 'high';
+    }
+
+    // 2.1 Mapeamento para Medium (Média)
+    if (['média', 'media', 'medium', 'moderada'].some(t => text.includes(t))) {
+        return 'medium';
+    }
+    
+    // 3. Mapeamento de termos para Lunch (Almoço)
+    if (['almoço', 'almoco', 'lunch', 'refeição', 'meio dia', '12h', '13h'].some(t => text.includes(t))) {
+        return 'lunch';
+    }
+    
+    // 4. Mapeamento de termos para End of Day (Fim do dia)
+    if (['fim', 'final', 'end', 'tarde', 'último', 'ultimo', '17h', '18h', 'fechamento'].some(t => text.includes(t))) {
+        return 'end_of_day';
+    }
+
+    // 5. Termos explícitos para Normal/Baixa
+    if (['normal', 'baixa', 'low', 'padrão', 'padrao', 'regular'].some(t => text.includes(t))) {
+        return 'normal';
+    }
+
+    return 'normal';
+};
+
+// Helper interno de status para cálculo automático de prioridade
+const getPosStatusForCalculation = (data: POSHealthData) => {
+    if (data.errorRate >= 6) return 'CRITICO';
+    if (data.paperStatus !== 'OK' || data.signalStrength < 20) return 'COMPROMETIDO';
+    if (data.errorRate < 6 && data.signalStrength > 40) return 'OPERATIVO';
+    return 'ATENCAO';
 };
 
 // Updated Mock Generator to return an ARRAY of machines
@@ -152,6 +199,9 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
         let sectorIdx = findIdx(['setor', 'segmento', 'categoria', 'ramo']);
         let openIdx = findIdx(['abertura', 'inicio', 'abre', 'open']);
         let closeIdx = findIdx(['fechamento', 'fim', 'fecha', 'encerra', 'close']);
+        
+        // Priority Column Detection (Expanded Keywords)
+        let priorityIdx = findIdx(['prioridade', 'priority', 'urgencia', 'urgência', 'nível', 'nivel', 'status', 'classificação', 'classificacao']);
 
         // Analytics Columns Detection
         let salesIdx = findIdx(['média', 'vendas', 'faturamento', 'receita', 'average']);
@@ -197,6 +247,16 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
               if(bestDay === '') bestDay = mock.bestDay;
           }
 
+          // Resolve Priority from File
+          let finalPriority: PriorityLevel = 'normal';
+          let finalSource: 'file' | 'auto' = 'auto';
+
+          // Se a coluna existir e tiver valor, usamos ela e marcamos como 'file'.
+          if (priorityIdx !== -1 && row[priorityIdx]) {
+              finalPriority = parsePriority(row[priorityIdx]);
+              finalSource = 'file';
+          }
+
           return {
             id: generateUUID(),
             Nome: name,
@@ -207,7 +267,8 @@ export const parseSheetFile = async (file: File): Promise<RawSheetRow[]> => {
             Setor: (sectorIdx !== -1 && row[sectorIdx]) ? String(row[sectorIdx]).trim() : undefined,
             HorarioAbertura: (openIdx !== -1) ? formatExcelTime(row[openIdx]) : undefined,
             HorarioFechamento: (closeIdx !== -1) ? formatExcelTime(row[closeIdx]) : undefined,
-            priority: 'normal',
+            priority: finalPriority,
+            prioritySource: finalSource,
             posData: undefined, // Will be merged later
             AverageSales: avgSales,
             BestDay: bestDay
@@ -333,13 +394,95 @@ export const mergeRouteAndHealthData = (routeData: RawSheetRow[], healthMap: Map
                     }
                 }
             }
-            // If we have a map but didn't find the company, we purposely leave finalPosData as undefined.
         }
         // If NO map is available (Demo Mode), we generate mocks for everything.
         else {
             finalPosData = generateMockPOSData(row.Nome);
         }
 
+        // --- AUTOMATIC PRIORITY CALCULATION ---
+        // Se a prioridade NÃO veio do arquivo (source='auto'), calculamos baseada na saúde
+        if (row.prioritySource === 'auto' && finalPosData && finalPosData.length > 0) {
+            const total = finalPosData.length;
+            const operativeCount = finalPosData.filter(d => getPosStatusForCalculation(d) === 'OPERATIVO').length;
+            const score = Math.round((operativeCount / total) * 100);
+
+            if (score <= 25) {
+                row.priority = 'high';
+            } else if (score <= 50) {
+                row.priority = 'medium';
+            } 
+            // score > 50 permanece 'normal'
+        }
+
         return { ...row, posData: finalPosData };
+    });
+};
+
+// Nova função para aplicar regras de carteira (Portfolio) automaticamente
+export const applyPortfolioRules = (rows: RawSheetRow[], teams: Team[]): RawSheetRow[] => {
+    const normalize = (s: string) => s ? s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "") : "";
+
+    return rows.map(row => {
+        // Se já estiver atribuído (ex: via coluna do arquivo), pula
+        if (row.assignedTeamId) return row;
+
+        const rowName = normalize(row.Nome);
+        const rowCity = normalize(row.Municipio || "");
+        const rowHood = normalize(row.Bairro || "");
+
+        // Find matches
+        for (const team of teams) {
+            if (!team.isActive) continue;
+
+            // 1. Verificação de Cobertura Geográfica da Equipe (Obrigatória para segurança)
+            // Se a equipe tem regiões definidas, verificamos se a linha se encaixa.
+            // Se não tem regiões, assumimos cobertura total (ou ignoramos, dependendo da regra de negócio).
+            // Aqui, para evitar homônimos em cidades diferentes, exigiremos o match se houver regiões.
+
+            let locationMatch = false;
+            
+            if (team.regions.length === 0) {
+                locationMatch = true; // Equipe "global" ou sem restrição geográfica configurada
+            } else {
+                locationMatch = team.regions.some(reg => {
+                    const regCity = normalize(reg.city);
+                    const regHood = normalize(reg.neighborhood);
+
+                    // Lógica de Match Geográfico:
+                    // Se a região tem Cidade E Bairro definidos -> Ambos devem bater (contido ou exato)
+                    // Se a região só tem Cidade -> Bate cidade
+                    // Se a região só tem Bairro -> Bate bairro
+
+                    const matchCity = !regCity || (rowCity && rowCity.includes(regCity)) || (regCity && regCity.includes(rowCity));
+                    const matchHood = !regHood || (rowHood && rowHood.includes(regHood)) || (regHood && regHood.includes(rowHood));
+
+                    return matchCity && matchHood;
+                });
+            }
+
+            // Se a equipe não cobre a região da atividade, não atribuímos mesmo que o nome bata na carteira.
+            // Isso evita atribuir o "McDonalds do Rio" para o colaborador que atende "McDonalds de SP".
+            if (!locationMatch) continue; 
+
+            // 2. Verificação de Carteira dos Membros
+            for (const member of team.members) {
+                if (!member.portfolio || member.portfolio.length === 0) continue;
+
+                // Check if name is in portfolio (fuzzy normalized match)
+                const hasPortfolioMatch = member.portfolio.some(pName => normalize(pName) === rowName);
+
+                if (hasPortfolioMatch) {
+                    return {
+                        ...row,
+                        assignedTeamId: team.id,
+                        assignedMemberId: member.id,
+                        distributionReason: "Carteira Fixa (Portfolio)"
+                    };
+                }
+            }
+        }
+
+        return row;
     });
 };

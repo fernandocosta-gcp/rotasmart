@@ -23,7 +23,7 @@ const TV_TRIVIA = [
 ];
 
 interface LoadingModalProps {
-    type?: 'route' | 'bus';
+    type?: 'route' | 'bus' | 'distribution';
 }
 
 const LoadingModal: React.FC<LoadingModalProps> = ({ type = 'route' }) => {
@@ -69,7 +69,13 @@ const LoadingModal: React.FC<LoadingModalProps> = ({ type = 'route' }) => {
             else if (next < 50) setStatusText("Analisando riscos de segurança e geolocalização...");
             else if (next < 75) setStatusText("Calculando distâncias e agrupando visitas...");
             else setStatusText("Finalizando roteiro e gerando horários...");
+        } else if (type === 'distribution') {
+            if (next < 25) setStatusText("Carregando regiões das equipes...");
+            else if (next < 50) setStatusText("Analisando endereços dos clientes (IA)...");
+            else if (next < 75) setStatusText("Cruzando bairros com áreas de cobertura...");
+            else setStatusText("Atribuindo visitas e balanceando carga...");
         } else {
+            // Bus type
             if (next < 25) setStatusText("Lendo endereços dos clientes...");
             else if (next < 50) setStatusText("Consultando base de transporte público...");
             else if (next < 75) setStatusText("Calculando distâncias de caminhada (300m)...");
@@ -98,13 +104,21 @@ const LoadingModal: React.FC<LoadingModalProps> = ({ type = 'route' }) => {
     return () => clearInterval(interval);
   }, []);
 
+  const getTitle = () => {
+      switch(type) {
+          case 'bus': return 'Localizando Pontos de Ônibus';
+          case 'distribution': return 'Distribuindo Atividades';
+          default: return 'Otimizando sua Rota';
+      }
+  };
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/80 backdrop-blur-sm transition-opacity">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-gray-900/80 backdrop-blur-sm transition-opacity">
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-8 relative overflow-hidden">
         
         <div className="text-center mb-8">
           <h3 className="text-2xl font-bold text-gray-800 mb-1">
-              {type === 'bus' ? 'Localizando Pontos de Ônibus' : 'Otimizando sua Rota'}
+              {getTitle()}
           </h3>
           <p className="text-blue-600 text-sm font-medium animate-pulse">{statusText}</p>
         </div>

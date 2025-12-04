@@ -1,7 +1,17 @@
 import { GoogleGenAI } from "@google/genai";
-import { RawSheetRow, UserPreferences, MultiDayPlan } from "../types";
+import { RawSheetRow, UserPreferences, MultiDayPlan, Team } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// --- DEFAULT RULES CONSTANT ---
+export const DEFAULT_DISTRIBUTION_RULES = `1. **Primary Match (Team):** If an activity's Neighborhood AND City match a Team's configured region, assign it to that Team.
+2. **Secondary Match (Team):** If only the City matches, assign it.
+3. **Fuzzy City Matching (CRITICAL):** Treat "São Bernardo" and "São Bernardo do Campo" as the EXACT SAME city. Treat "SP" as "São Paulo". Ignore capitalization and minor abbreviations.
+4. **Member Selection (MANDATORY):** If a Team is selected, you MUST select the best **Member** from that team.
+    a. **Availability:** Member must NOT be on vacation (isOnVacation: false).
+    b. **Location Proximity:** Calculate the conceptual distance between the member's 'startLocation' and the activity address. "Centro, São Bernardo" is VERY close to "Centro, São Bernardo do Campo".
+    c. **Fallback:** If multiple members are available and location is similar, pick any active member. DO NOT leave memberId null if the team has active members.
+5. **Reasoning:** You must provide a short 'reason' string explaining why you chose that team/member (e.g., "City Match + Closest Start Location").`;
 
 // Nova função para obter coordenadas de Bairros/Cidades em lote para o Mapa de Calor
 export const getRegionCoordinates = async (regions: string[]): Promise<Record<string, { lat: number, lng: number }>> => {
@@ -113,6 +123,96 @@ export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<st
   }
 };
 
+// --- NEW FUNCTION: AI Distribution ---
+export const distributeActivities = async (
+    activities: RawSheetRow[], 
+    teams: Team[],
+    customRules?: string // Optional custom rules injection
+): Promise<Record<string, { teamId: string, memberId: string, reason: string }>> => {
+    
+    // Simplificar dados para o prompt (economia de tokens)
+    const simplifiedActivities = activities.map(a => ({
+        id: a.id,
+        // Send FULL address concatenated to avoid separation issues
+        fullAddress: [a.Endereco, a.Bairro, a.Municipio].filter(Boolean).join(", "),
+        businessHours: a.HorarioAbertura && a.HorarioFechamento ? `${a.HorarioAbertura}-${a.HorarioFechamento}` : 'Any'
+    }));
+
+    const simplifiedTeams = teams.map(t => ({
+        id: t.id,
+        name: t.name,
+        regions: t.regions.map(r => `${r.neighborhood} (${r.city})`).join(', '),
+        // Include detailed member info for selection logic
+        members: t.members.map(m => ({
+            id: m.id,
+            name: m.name,
+            isOnVacation: m.isOnVacation,
+            startLocation: m.preferredStartLocation || 'Headquarters',
+            endLocation: m.preferredEndLocation || 'Headquarters',
+            // Summarize schedule (just Mon-Fri for brevity context)
+            scheduleSummary: m.schedule
+                .filter(s => !s.isDayOff)
+                .map(s => `${s.dayOfWeek.substr(0,3)}:${s.startTime}-${s.endTime}`)
+                .join(', ')
+        }))
+    }));
+
+    // Use custom rules if provided, otherwise default
+    const activeRules = customRules && customRules.trim().length > 0 
+        ? customRules 
+        : DEFAULT_DISTRIBUTION_RULES;
+
+    const prompt = `
+      Act as a Logistics Dispatcher AI.
+      
+      GOAL: Distribute the following ACTIVITIES among the available TEAMS and specifically assign the best MEMBER.
+
+      RULES TO FOLLOW:
+      ${activeRules}
+
+      TEAMS & MEMBERS CONFIGURATION:
+      ${JSON.stringify(simplifiedTeams, null, 2)}
+
+      ACTIVITIES TO DISTRIBUTE:
+      ${JSON.stringify(simplifiedActivities, null, 2)}
+
+      RETURN:
+      A pure JSON object where:
+      - Key: Activity ID
+      - Value: Object { "teamId": "...", "memberId": "...", "reason": "Short explanation of logic" }
+      
+      Example: 
+      { 
+        "activity_id_1": { "teamId": "t1", "memberId": "m1", "reason": "Match City São Bernardo" }, 
+        "activity_id_2": { "teamId": "t1", "memberId": "m2", "reason": "Closest start location" } 
+      }
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                // responseMimeType: 'application/json' 
+            }
+        });
+
+        let text = response.text;
+        if (!text) return {};
+
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            text = jsonMatch[0];
+        }
+
+        return JSON.parse(text);
+
+    } catch (e) {
+        console.error("Distribution failed", e);
+        throw new Error("Falha na distribuição inteligente via IA.");
+    }
+};
+
 export const generateRoutePlan = async (
   sheetData: RawSheetRow[],
   preferences: UserPreferences,
@@ -122,6 +222,7 @@ export const generateRoutePlan = async (
   const stopsList = sheetData.map(row => {
     let priorityNote = "";
     if (row.priority === 'high') priorityNote = " [PRIORIDADE ALTA: Visitar no início do roteiro]";
+    if (row.priority === 'medium') priorityNote = " [PRIORIDADE MÉDIA: Importante mas flexível]";
     if (row.priority === 'lunch') priorityNote = " [VISITA DE ALMOÇO: Agendar próximo de 12:00-13:00]";
     if (row.priority === 'end_of_day') priorityNote = " [FIM DO DIA: Agendar como uma das últimas visitas]";
     
@@ -139,10 +240,13 @@ export const generateRoutePlan = async (
       ? ` [BUS STOP CHECKED: ${row.nearbyBusStop}]` 
       : '';
 
+    // Pass assigned team info if available (Gemini can use this to group or filter if we wanted, but mainly for context)
+    const teamInfo = row.assignedTeamId ? ` [EQUIPE ATRIBUIDA ID: ${row.assignedTeamId}]` : '';
+
     // Utilizar endereço completo também na geração de rota para melhor precisão
     const fullAddress = [row.Endereco, row.Bairro, row.Municipio].filter(Boolean).join(", ") || 'Endereço não especificado';
 
-    return `- ${row.Nome} (${fullAddress}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}${busInfo}`;
+    return `- ${row.Nome} (${fullAddress}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}${busInfo}${teamInfo}`;
   }).join('\n');
 
   // Determine locations

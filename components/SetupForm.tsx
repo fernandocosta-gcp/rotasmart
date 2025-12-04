@@ -1,13 +1,16 @@
-import React, { useState, ChangeEvent, useEffect, useRef } from 'react';
-import { UserPreferences, RawSheetRow, PriorityLevel, POSHealthData } from '../types';
-import { parseSheetFile, loadHealthBaseFromAssets, mergeRouteAndHealthData } from '../services/excelService';
+import React, { useState, ChangeEvent, useEffect, useRef, useMemo } from 'react';
+import { UserPreferences, RawSheetRow, PriorityLevel, POSHealthData, Team, TeamMember } from '../types';
+import { parseSheetFile, loadHealthBaseFromAssets, mergeRouteAndHealthData, applyPortfolioRules } from '../services/excelService';
 import { batchCheckBusStops } from '../services/geminiService';
 import LoadingModal from './LoadingModal';
 import AnalysisModal from './AnalysisModal';
+import DistributionModal from './DistributionModal';
 
 interface SetupFormProps {
   onGenerate: (prefs: UserPreferences, data: RawSheetRow[]) => void;
   isLoading: boolean;
+  teams: Team[]; 
+  distributionRules?: string; 
 }
 
 const BUSINESS_SECTORS = [
@@ -25,7 +28,22 @@ const BUSINESS_SECTORS = [
   "Varejo (Automotivo)"
 ];
 
-const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
+const normalizeStr = (str: string) => {
+    if (!str) return "";
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+};
+
+const getTransportIcon = (member: TeamMember) => {
+    const mode = member.transportMode;
+    if (mode === 'bicycle') return '🚲';
+    if (mode === 'walking') return '🚶';
+    if (mode === 'motorcycle') return '🏍️';
+    // Se for 'car' ou o booleano antigo usesCar for true
+    if (mode === 'car' || member.usesCar) return '🚗';
+    return '🚌'; // Default: Transporte Público
+};
+
+const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading, teams, distributionRules }) => {
   const [prefs, setPrefs] = useState<UserPreferences>({
     departureDate: new Date().toISOString().split('T')[0],
     departureTime: '08:00',
@@ -54,40 +72,36 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   const [fileName, setFileName] = useState<string>('');
   const [error, setError] = useState<string>('');
   
-  // State for Import Filter Modal
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [tempSheetData, setTempSheetData] = useState<RawSheetRow[]>([]);
   const [selectedSectors, setSelectedSectors] = useState<string[]>(BUSINESS_SECTORS);
   const [importMode, setImportMode] = useState<'all' | 'filter'>('all');
   
-  // New state for file processing feedback
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [isCheckingBus, setIsCheckingBus] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // State for bulk selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-  // State for delete confirmation modal
   const [itemToDelete, setItemToDelete] = useState<string | null>(null); 
   const [isBulkDelete, setIsBulkDelete] = useState(false); 
 
-  // State for Parking Info Modal
   const [parkingModalOpen, setParkingModalOpen] = useState(false);
   const [currentParkingId, setCurrentParkingId] = useState<string | null>(null);
   const [parkingText, setParkingText] = useState('');
 
-  // State for POS Health Modal (Individual)
   const [posModalOpen, setPosModalOpen] = useState(false);
   const [selectedPosData, setSelectedPosData] = useState<{name: string, data: POSHealthData[]} | null>(null);
 
-  // State for GLOBAL Health Modal
   const [globalHealthOpen, setGlobalHealthOpen] = useState(false);
   
-  // State for ANALYSIS Modal (NEW)
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
 
-  // --- EFFECT: Load Static Health Base ---
+  const [showDistributionModal, setShowDistributionModal] = useState(false);
+
+  const allAssigned = sheetData.length > 0 && sheetData.every(row => row.assignedTeamId);
+  const activeTeamsCount = teams.filter(t => t.isActive).length;
+
   useEffect(() => {
     const loadHealth = async () => {
         try {
@@ -105,18 +119,101 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     loadHealth();
   }, []);
 
-  // 1. ROUTE FILE UPLOAD
+  // --- MEMO: Coverage Stats ---
+  const coverageStats = useMemo(() => {
+    if (sheetData.length === 0) return null;
+
+    const activeTeams = teams.filter(t => t.isActive);
+    let baselineCapacity = 0;
+    let totalCollaborators = 0;
+
+    activeTeams.forEach(team => {
+        const activeMembers = team.members.filter(m => !m.isOnVacation).length;
+        totalCollaborators += activeMembers;
+        const capacityPerPerson = team.maxActivitiesPerRoute || 20;
+        if (activeMembers > 0) {
+            baselineCapacity += (capacityPerPerson * activeMembers);
+        }
+    });
+
+    const totalVisits = sheetData.length;
+    const assignedVisits = sheetData.filter(row => row.assignedTeamId).length;
+    const pendingVisits = totalVisits - assignedVisits;
+    const remainingCapacity = Math.max(0, baselineCapacity - assignedVisits);
+
+    const uncoveredLabels = new Set<string>(); 
+    const unassignedRows = sheetData.filter(row => !row.assignedTeamId);
+
+    unassignedRows.forEach(row => {
+        const rowBairro = normalizeStr(row.Bairro || "");
+        const rowCity = normalizeStr(row.Municipio || "");
+        
+        let isCoveredByGeography = false;
+
+        activeTeams.forEach(team => {
+            const covers = team.regions.some(reg => {
+                const teamBairro = normalizeStr(reg.neighborhood);
+                const teamCity = normalizeStr(reg.city);
+                if (!teamBairro && !teamCity) return false; 
+
+                let matchCity = false;
+                if (teamCity && rowCity) {
+                    matchCity = (rowCity === teamCity) || (rowCity.includes(teamCity)) || (teamCity.includes(rowCity));
+                }
+                if (!matchCity) return false; 
+
+                let matchBairro = false;
+                if (teamBairro) {
+                    if (rowBairro) {
+                        matchBairro = (rowBairro === teamBairro) || (rowBairro.includes(teamBairro)) || (teamBairro.includes(rowBairro));
+                    } else {
+                        matchBairro = false;
+                    }
+                } else {
+                    matchBairro = true; 
+                }
+                return matchCity && matchBairro;
+            });
+            if (covers) isCoveredByGeography = true;
+        });
+
+        if (!isCoveredByGeography) {
+            const displayLabel = (row.Bairro && row.Municipio) 
+            ? `${row.Bairro} - ${row.Municipio}`
+            : (row.Endereco ? row.Endereco.substring(0, 35) + "..." : row.Nome);
+            uncoveredLabels.add(displayLabel);
+        }
+    });
+
+    let capacityHealth = 0;
+    if (pendingVisits === 0) capacityHealth = 100;
+    else if (remainingCapacity === 0) capacityHealth = 0;
+    else {
+        capacityHealth = Math.min(100, Math.round((remainingCapacity / pendingVisits) * 100));
+    }
+
+    return {
+        availableTeamsCount: activeTeams.length,
+        totalCollaborators,
+        baselineCapacity,
+        remainingCapacity,
+        assignedVisits,
+        totalVisits,
+        pendingVisits,
+        capacityHealth,
+        uncoveredRegions: Array.from(uncoveredLabels).slice(0, 50) 
+    };
+  }, [sheetData, teams]);
+
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setFileName(file.name);
-      setIsProcessingFile(true); // Show loading state
-      setError(''); // Clear previous errors
+      setIsProcessingFile(true); 
+      setError(''); 
 
       try {
-        // Add a small artificial delay to allow UI to update to "Processing" state
         await new Promise(r => setTimeout(r, 100));
-
         const data = await parseSheetFile(file);
         
         if (!data || data.length === 0) {
@@ -134,18 +231,16 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
         setError(`Erro na leitura: ${msg}`);
         setSheetData([]);
         
-        // Force reset input manually
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
       } finally {
         setIsProcessingFile(false);
-        e.target.value = ''; // Ensure reset
+        e.target.value = '';
       }
     }
   };
 
-  // Ensure input clears on click so "onChange" fires even for same file
   const handleInputClick = (e: React.MouseEvent<HTMLInputElement>) => {
       (e.target as HTMLInputElement).value = '';
   };
@@ -168,8 +263,11 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
           finalData = filtered;
       }
 
-      // Automatically merge with pre-loaded health map
+      // 1. Merge com dados de Saúde
       finalData = mergeRouteAndHealthData(finalData, healthMap);
+      
+      // 2. Auto-Associação baseada na Carteira (Portfolio) + Região
+      finalData = applyPortfolioRules(finalData, teams);
 
       setSheetData(finalData);
       setShowFilterModal(false);
@@ -178,7 +276,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   };
 
   const toggleSector = (sector: string) => {
-      setImportMode('filter'); // Switch to filter mode if clicking a checkbox
+      setImportMode('filter');
       setSelectedSectors(prev => 
           prev.includes(sector) ? prev.filter(s => s !== sector) : [...prev, sector]
       );
@@ -193,7 +291,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       }
   };
 
-  // --- BUS STOP CHECK LOGIC (UPDATED) ---
   const handleCheckBusStops = async () => {
       if (sheetData.length === 0) return;
       
@@ -205,27 +302,21 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
               const result = results[row.id];
               
               if (result) {
-                  // Verifica se o retorno é negativo
                   const isNegative = result.toLowerCase().includes("nenhum") || result.toLowerCase().includes("não encontrado");
 
                   if (isNegative) {
                       return {
                           ...row,
                           busStatus: 'not_found'
-                          // Mantém o endereço original e contexto
                       };
                   } else {
-                      // Limpeza da string para remover "Ponto de ônibus na", "Parada em", etc.
                       let cleanAddress = result.replace(/^(Ponto de ônibus (na|no|em|a)|Ponto (na|no|em|a)|Parada (na|no|em|a)|Localizado (na|no|em|a)|Próximo (ao?|à)|Em frente (ao?|à))\s+/i, '');
-                      
-                      // Capitalize first letter
                       cleanAddress = cleanAddress.charAt(0).toUpperCase() + cleanAddress.slice(1);
 
                       return {
                           ...row,
-                          Endereco: cleanAddress, // Substitui o endereço pelo ponto encontrado
+                          Endereco: cleanAddress,
                           busStatus: 'found'
-                          // Mantém o Bairro e Municipio originais para o layout
                       };
                   }
               }
@@ -237,9 +328,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
           setIsCheckingBus(false);
       }
   };
-
-
-  // --- Bulk Actions Logic ---
 
   const toggleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.checked) {
@@ -257,7 +345,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
 
   const bulkUpdatePriority = (priority: PriorityLevel) => {
       setSheetData(prev => prev.map(row => 
-          selectedIds.includes(row.id) ? { ...row, priority } : row
+          selectedIds.includes(row.id) ? { ...row, priority, prioritySource: 'file' } : row
       ));
   };
 
@@ -271,9 +359,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       setIsBulkDelete(false);
   };
 
-  // --- End Bulk Actions Logic ---
-
-  // Parking Info Handlers
   const openParkingModal = (id: string) => {
       const row = sheetData.find(r => r.id === id);
       if (row) {
@@ -298,12 +383,10 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     if (itemToDelete) {
       setSheetData(prev => prev.filter(row => row.id !== itemToDelete));
       setItemToDelete(null);
-      // Also remove from selected if present
       setSelectedIds(prev => prev.filter(id => id !== itemToDelete));
     }
   };
 
-  // POS Modal Handler
   const openPosModal = (row: RawSheetRow) => {
       if (row.posData) {
           setSelectedPosData({
@@ -321,8 +404,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       return;
     }
     
-    // VALIDATIONS REMOVED FOR START/END LOCATION AS REQUESTED
-    
     if (prefs.departureTime >= prefs.returnTime) {
         setError('O horário de retorno deve ser posterior ao horário de saída.');
         return;
@@ -333,13 +414,13 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   const getPriorityLabel = (p: PriorityLevel) => {
       switch(p) {
           case 'high': return { text: 'Alta Prioridade', class: 'bg-red-100 text-red-800' };
-          case 'lunch': return { text: 'Almoço', class: 'bg-orange-100 text-orange-800' };
+          case 'medium': return { text: 'Média Prioridade', class: 'bg-orange-100 text-orange-800' };
+          case 'lunch': return { text: 'Almoço', class: 'bg-yellow-100 text-yellow-800' };
           case 'end_of_day': return { text: 'Fim do Dia', class: 'bg-purple-100 text-purple-800' };
           default: return { text: 'Normal', class: 'bg-gray-100 text-gray-600' };
       }
   };
 
-  // POS Health Helper (Same as previous)
   const getHealthStatus = (data: POSHealthData) => {
       if (data.errorRate >= 6) return { label: 'CRÍTICO', color: 'text-red-600 bg-red-100', border: 'border-red-200' };
       if (data.paperStatus !== 'OK' || data.signalStrength < 20) return { label: 'COMPROMETIDO', color: 'text-orange-600 bg-orange-100', border: 'border-orange-200' };
@@ -367,81 +448,10 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
       return issues.join(' ');
   };
 
-  // Helper para calcular etiqueta de prioridade operacional
-  const getOperationalPriorityBadge = (posData: POSHealthData[]) => {
-      const total = posData.length;
-      if (total === 0) return null;
-      
-      const operativeCount = posData.filter(d => getHealthStatus(d).label === 'OPERATIVO').length;
-      const score = Math.round((operativeCount / total) * 100);
-
-      if (score <= 25) {
-        return (
-          <span className="text-[10px] bg-red-100 text-red-700 border border-red-200 px-1.5 py-0.5 rounded font-bold">
-            Alta Prioridade
-          </span>
-        );
-      } else if (score <= 50) {
-        return (
-          <span className="text-[10px] bg-orange-100 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded font-bold">
-            Média Prioridade
-          </span>
-        );
-      } else if (score <= 75) {
-        return (
-          <span className="text-[10px] bg-green-100 text-green-700 border border-green-200 px-1.5 py-0.5 rounded font-bold">
-            Baixa Prioridade
-          </span>
-        );
-      }
-      // Acima de 75% não exibe etiqueta (considerado saudável/padrão)
-      return null;
-  };
-
-  // Calcula estatísticas globais
-  const getGlobalStats = () => {
-    let totalMachines = 0;
-    let totalOperative = 0;
-    let totalCritical = 0;
-    let totalAttention = 0;
-    let totalIncidents = 0;
-    const criticalStores: {name: string, count: number}[] = [];
-
-    sheetData.forEach(row => {
-        if(row.posData) {
-            let rowCritical = 0;
-            row.posData.forEach(machine => {
-                totalMachines++;
-                if (machine.incidents) totalIncidents += machine.incidents;
-
-                const status = getHealthStatus(machine).label;
-                if(status === 'OPERATIVO') totalOperative++;
-                else if(status === 'CRÍTICO') {
-                    totalCritical++;
-                    rowCritical++;
-                }
-                else totalAttention++; // Includes COMPROMETIDO and ATENÇÃO
-            });
-            
-            if (rowCritical > 0) {
-                criticalStores.push({ name: row.Nome, count: rowCritical });
-            }
-        }
-    });
-
-    // Sort stores by most critical issues
-    criticalStores.sort((a, b) => b.count - a.count);
-
-    return { totalMachines, totalOperative, totalCritical, totalAttention, totalIncidents, criticalStores };
-  };
-
   const itemToDeleteName = itemToDelete ? sheetData.find(r => r.id === itemToDelete)?.Nome : '';
 
-  // Helper to render the Gauge Chart inside Modal
   const renderHealthGauge = (total: number, operative: number) => {
     const score = total > 0 ? Math.round((operative / total) * 100) : 0;
-    
-    // Determine Fear/Greed Label and Color
     let label = "";
     let colorClass = "";
     if (score <= 25) { label = "Muito Medo"; colorClass = "text-red-600"; }
@@ -449,16 +459,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
     else if (score <= 75) { label = "Confiante"; colorClass = "text-lime-600"; }
     else { label = "Muito Confiante"; colorClass = "text-green-700"; }
 
-    // Rotation calculation: 0% = -90deg, 100% = 90deg
     const rotation = (score / 100) * 180 - 90;
 
     return (
         <div className="flex flex-col items-center justify-center bg-white rounded-xl border border-gray-200 shadow-sm p-4 h-full">
             <h3 className="text-xs font-bold uppercase text-gray-500 mb-2">Índice de Operacionalidade</h3>
-            
-            {/* Gauge Container */}
             <div className="relative w-48 h-24 overflow-hidden mb-2">
-                {/* Gauge Background (Conic Gradient) */}
                 <div 
                     className="w-48 h-48 rounded-full box-border"
                     style={{
@@ -473,8 +479,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                         WebkitMask: 'radial-gradient(transparent 55%, black 56%)'
                     }}
                 ></div>
-                
-                {/* Needle */}
                 <div 
                     className="absolute bottom-0 left-1/2 w-1 h-[90%] bg-gray-800 origin-bottom rounded-full transition-transform duration-700 ease-out"
                     style={{ 
@@ -484,17 +488,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                 >
                     <div className="absolute -top-1 -left-1 w-3 h-3 bg-gray-800 rounded-full"></div>
                 </div>
-                
-                {/* Base Pivot */}
                 <div className="absolute bottom-[-5px] left-1/2 w-4 h-4 bg-gray-800 rounded-full transform -translate-x-1/2 z-20"></div>
             </div>
-
-            {/* Score & Label */}
             <div className="text-center -mt-2">
                 <div className="text-3xl font-bold text-gray-800">{score}%</div>
                 <div className={`text-sm font-bold uppercase ${colorClass}`}>{label}</div>
             </div>
-            
             <div className="flex justify-between w-full px-4 mt-2 text-[10px] text-gray-400 font-mono">
                 <span>0</span>
                 <span>100</span>
@@ -504,19 +503,28 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
   };
 
   return (
-    <div className={`bg-white rounded-2xl shadow-xl p-6 w-full mx-auto border border-gray-100 transition-all duration-300 ${sheetData.length > 0 ? 'max-w-7xl' : 'max-w-3xl'}`}>
-      {/* Show Loading Modal for Bus Checks */}
+    <div className={`bg-white rounded-2xl shadow-xl p-6 w-full mx-auto border border-gray-100 transition-all duration-300 ${sheetData.length > 0 ? 'max-w-full' : 'max-w-3xl'}`}>
+      
       {isCheckingBus && <LoadingModal type="bus" />}
-
-      {/* Show Analysis Modal */}
       {showAnalysisModal && <AnalysisModal data={sheetData} onClose={() => setShowAnalysisModal(false)} />}
+      
+      {showDistributionModal && (
+          <DistributionModal 
+              activities={sheetData} 
+              teams={teams} 
+              distributionRules={distributionRules}
+              onClose={() => setShowDistributionModal(false)} 
+              onApply={(updatedData) => {
+                  setSheetData(updatedData);
+                  setShowDistributionModal(false);
+              }}
+          />
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-8">
         
-        {/* Step 1: File Upload (Only visible if NO data) */}
         {sheetData.length === 0 && (
             <div className="space-y-6">
-                {/* ROTA UPLOAD */}
                 <div className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors cursor-pointer relative group ${isProcessingFile ? 'border-gray-300 bg-gray-50' : 'border-blue-200 bg-blue-50 hover:bg-blue-100'}`}>
                     <input 
                         ref={fileInputRef}
@@ -547,7 +555,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     )}
                 </div>
 
-                {/* STATUS BARRA DE SAUDE */}
                 <div className={`p-4 rounded-lg flex items-center justify-between transition-colors ${healthBaseStatus.includes('⚠️') ? 'bg-yellow-50 text-yellow-800 border border-yellow-200' : (healthBaseStatus.includes('❌') ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-green-50 text-green-800 border border-green-200')}`}>
                     <div className="flex items-center gap-3">
                          <div className="p-2 bg-white rounded-full shadow-sm">
@@ -557,7 +564,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     </div>
                 </div>
 
-                 {/* Instructions Helper */}
                  {healthBaseStatus.includes('⚠️') && (
                      <div className="text-center bg-gray-50 p-4 rounded-lg border border-gray-200 text-xs text-gray-600">
                         <p className="font-bold mb-1">Como usar dados reais?</p>
@@ -569,26 +575,46 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* Step 2: Combined View (Preview + Settings) */}
         {sheetData.length > 0 && (
             <div className="flex flex-col lg:flex-row gap-6 items-start">
                 
-                {/* Left Column: Preview Table */}
                 <div className="flex-1 w-full min-w-0 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col h-full self-stretch relative">
                     
-                    {/* Header with Bulk Actions */}
                     <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-col gap-2 flex-shrink-0">
                         <div className="flex flex-wrap justify-between items-center gap-2">
                             <h3 className="font-semibold text-gray-700">Lista de Empresas ({sheetData.length})</h3>
                             <div className="flex flex-wrap gap-3 text-xs items-center">
-                                 {/* NEW: Analysis Module Button */}
                                  <button
                                      type="button"
                                      onClick={() => setShowAnalysisModal(true)}
                                      className="flex items-center gap-1 bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-200 transition-colors shadow-sm"
                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"></path></svg>
                                     Módulo de Análise
+                                 </button>
+
+                                 <button
+                                     type="button"
+                                     onClick={() => setShowDistributionModal(true)}
+                                     disabled={allAssigned || activeTeamsCount === 0}
+                                     title={activeTeamsCount === 0 ? "Cadastre equipes ativas para usar a distribuição." : ""}
+                                     className={`flex items-center gap-1 px-3 py-1.5 rounded-lg font-bold transition-colors shadow-sm ${
+                                         allAssigned || activeTeamsCount === 0
+                                         ? 'bg-gray-200 text-gray-500 border border-gray-300 cursor-not-allowed' 
+                                         : 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white'
+                                     }`}
+                                 >
+                                    {allAssigned ? (
+                                        <>
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                            Distribuído
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                            Distribuir por Equipe
+                                        </>
+                                    )}
                                  </button>
                                  
                                  <button
@@ -613,7 +639,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                      onClick={() => setGlobalHealthOpen(true)}
                                      className="flex items-center gap-1 bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200 transition-colors shadow-sm"
                                  >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
                                     Monitoramento Global
                                  </button>
                                  {(!healthMap || healthMap.size === 0) && (
@@ -631,7 +657,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                             </div>
                         </div>
                         
-                        {/* Bulk Action Bar */}
                         {selectedIds.length > 0 && (
                             <div className="flex items-center justify-between bg-blue-50 p-2 rounded-lg border border-blue-100 animate-fade-in-up">
                                 <span className="text-xs font-bold text-blue-800 ml-1">
@@ -649,7 +674,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                         )}
                     </div>
                     
-                    <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-grow" style={{ maxHeight: '700px' }}>
+                    <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-grow" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                         <table className="min-w-full divide-y divide-gray-200 relative pb-24">
                             <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                                 <tr>
@@ -662,6 +687,8 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                         />
                                     </th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa / Maquininhas</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Equipe / Colaborador</th>
+                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Prioridade</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detalhes (Horário)</th>
                                 </tr>
@@ -672,6 +699,8 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     const busStatus = row.busStatus;
                                     const isBusStop = busStatus === 'found';
                                     const isBusNotFound = busStatus === 'not_found';
+                                    const assignedTeam = row.assignedTeamId ? teams.find(t => t.id === row.assignedTeamId) : null;
+                                    const assignedMember = assignedTeam && row.assignedMemberId ? assignedTeam.members.find(m => m.id === row.assignedMemberId) : null;
 
                                     return (
                                         <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.includes(row.id) ? 'bg-blue-50/30' : ''}`}>
@@ -699,9 +728,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                 )}
                                                 
                                                 <div className="flex items-center gap-2 mt-1">
-                                                    {/* Operational Priority Badge */}
-                                                    {hasPos && getOperationalPriorityBadge(row.posData!)}
-
                                                     <span className={`text-xs px-2 py-0.5 rounded-full border ${hasPos ? 'bg-gray-100 text-gray-600 border-gray-200' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
                                                         {hasPos ? row.posData!.length : 0} POS
                                                     </span>
@@ -709,11 +735,40 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                         <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold">! Crítico</span>
                                                     )}
                                                 </div>
-                                                {row.priority !== 'normal' && (
-                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mt-1 ${getPriorityLabel(row.priority).class}`}>
-                                                        {getPriorityLabel(row.priority).text}
-                                                    </span>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                {assignedTeam ? (
+                                                    <div className="flex flex-col items-start gap-1">
+                                                        <span 
+                                                            className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded-full shadow-sm flex items-center w-fit gap-1 cursor-help"
+                                                            title={row.distributionReason || "Atribuído automaticamente"}
+                                                        >
+                                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                                                            {assignedTeam.name}
+                                                        </span>
+                                                        {assignedMember && (
+                                                            <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1 ml-1">
+                                                                <span title={assignedMember.transportMode === 'car' ? 'Carro' : 'Outro'} className="text-[14px]">
+                                                                    {getTransportIcon(assignedMember)}
+                                                                </span>
+                                                                {assignedMember.name}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-red-600 text-xs font-bold">Sem equipe para esta região</span>
                                                 )}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <div className="flex flex-col items-start gap-1">
+                                                    {row.priority !== 'normal' ? (
+                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getPriorityLabel(row.priority).class}`}>
+                                                            {getPriorityLabel(row.priority).text}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-xs text-gray-400">Normal</span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate" title={`${row.Endereco}${row.Bairro ? `, ${row.Bairro}` : ''}${row.Municipio ? `, ${row.Municipio}` : ''}`}>
                                                 <div className="flex flex-col">
@@ -728,15 +783,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                         )}
                                                         <span className="truncate font-medium text-gray-900">{row.Endereco}</span>
                                                     </div>
-                                                    
-                                                    {/* Display Bairro and Municipio */}
                                                     {(row.Bairro || row.Municipio) && (
                                                         <span className="text-xs text-gray-500 truncate mt-0.5">
                                                             {[row.Bairro, row.Municipio].filter(Boolean).join(", ")}
                                                         </span>
                                                     )}
                                                 </div>
-
                                                 <button 
                                                         type="button"
                                                         onClick={(e) => { e.stopPropagation(); openParkingModal(row.id); }}
@@ -745,7 +797,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                                 >
                                                         🅿️
                                                 </button>
-
                                                 {row.customParkingInfo && (
                                                     <div className="mt-1 flex items-start text-xs font-medium text-indigo-600 bg-indigo-50 p-1 rounded inline-block">
                                                         {row.customParkingInfo}
@@ -766,8 +817,63 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     </div>
                 </div>
 
-                {/* Right Column: Settings */}
                 <div className="w-full lg:w-[380px] flex-shrink-0 space-y-4 animate-fade-in-up">
+                    
+                    {coverageStats && (
+                        <div className={`p-5 rounded-xl border shadow-sm transition-all ${coverageStats.uncoveredRegions.length > 0 ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                            <h3 className={`font-semibold mb-3 flex items-center ${coverageStats.uncoveredRegions.length > 0 ? 'text-red-800' : 'text-blue-800'}`}>
+                                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    {coverageStats.uncoveredRegions.length > 0 
+                                     ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                     : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    }
+                                </svg>
+                                Capacidade Operacional
+                            </h3>
+
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div className="bg-white p-2 rounded border border-gray-100 shadow-sm">
+                                    <span className="block text-xs text-gray-500 uppercase font-bold">Equipes Disp.</span>
+                                    <span className="text-lg font-bold text-gray-800">{coverageStats.availableTeamsCount}</span>
+                                </div>
+                                <div className="bg-white p-2 rounded border border-gray-100 shadow-sm">
+                                    <span className="block text-xs text-gray-500 uppercase font-bold">Colaboradores</span>
+                                    <span className="text-lg font-bold text-gray-800">{coverageStats.totalCollaborators}</span>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-3 rounded border border-gray-100 shadow-sm mb-3">
+                                <div className="flex justify-between items-end mb-1">
+                                     <span className="text-xs text-gray-500 uppercase font-bold">Capacidade Restante</span>
+                                     <span className={`text-xs font-bold ${coverageStats.capacityHealth > 50 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {coverageStats.capacityHealth}% da Demanda
+                                     </span>
+                                </div>
+                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                     <div 
+                                        className={`h-2 rounded-full ${coverageStats.capacityHealth > 50 ? 'bg-green-500' : 'bg-red-500'}`} 
+                                        style={{ width: `${coverageStats.capacityHealth}%` }}
+                                     ></div>
+                                </div>
+                                <div className="flex justify-between text-xs mt-1 text-gray-600">
+                                    <span>{coverageStats.pendingVisits} Visitas Pendentes</span>
+                                    <span>{coverageStats.remainingCapacity} Restantes (de {coverageStats.baselineCapacity})</span>
+                                </div>
+                            </div>
+
+                            {coverageStats.uncoveredRegions.length > 0 && (
+                                <div className="bg-red-100 border border-red-200 rounded p-2 text-xs text-red-800">
+                                    <span className="font-bold block mb-1">⚠️ Regiões sem cobertura (Geográfica):</span>
+                                    <ul className="list-disc list-inside max-h-20 overflow-y-auto custom-scrollbar">
+                                        {coverageStats.uncoveredRegions.map((r, i) => (
+                                            <li key={i} className="truncate">{r}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 shadow-sm">
                         <h3 className="font-semibold text-gray-800 mb-4 flex items-center">
                             <svg className="w-5 h-5 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -824,7 +930,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     <span className="text-gray-700 text-sm">Abastecer</span>
                                 </label>
                                 
-                                {/* Office Stop Settings */}
                                 <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
                                     <label className="flex items-center space-x-2 cursor-pointer mb-2">
                                         <input 
@@ -877,7 +982,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                     )}
                                 </div>
 
-                                {/* Lunch Settings */}
                                 <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
                                     <label className="flex items-center space-x-2 cursor-pointer mb-2">
                                         <input 
@@ -950,10 +1054,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* ... Rest of modals ... */}
-        {/* Only included relevant modals to save context window if unchanged */}
-        {/* ... (Error, Filter, Delete, Parking, POS, Global modals remain as previous state) ... */}
-
         {error && (
             <div className="p-4 bg-red-100 text-red-700 rounded-xl text-sm flex items-center justify-center animate-pulse border border-red-200 shadow-sm mt-4 font-semibold">
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -961,7 +1061,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* --- IMPORT FILTER MODAL --- */}
         {showFilterModal && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 transform transition-all scale-100 flex flex-col max-h-[90vh]">
@@ -1036,8 +1135,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
         
-        {/* ... (Modals for Delete, Parking, POS, Global retained from original code) ... */}
-        {/* Delete Confirmation Modal */}
         {(itemToDelete || isBulkDelete) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 transform transition-all scale-100 animate-fade-in-up">
@@ -1072,7 +1169,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* Parking Info Modal */}
         {parkingModalOpen && (
              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity">
                 <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 transform transition-all scale-100 animate-fade-in-up">
@@ -1111,11 +1207,9 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
              </div>
         )}
 
-        {/* POS Health Dashboard Modal - INDIVIDUAL */}
         {posModalOpen && selectedPosData && (
             <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md transition-opacity">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full overflow-hidden transform transition-all scale-100 animate-fade-in-up flex flex-col max-h-[90vh]">
-                    {/* Header */}
                     <div className="bg-[#3483fa] px-6 py-5 flex justify-between items-start flex-shrink-0">
                         <div>
                             <h2 className="text-xl font-bold text-white mb-1">Painel de Saúde POS</h2>
@@ -1126,16 +1220,14 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                 <span className="text-blue-100">{selectedPosData.data.length} Maquininhas</span>
                             </p>
                         </div>
-                        <button onClick={() => setPosModalOpen(false)} className="text-white/80 hover:text-white transition-colors">
+                        <button type="button" onClick={() => setPosModalOpen(false)} className="text-white/80 hover:text-white transition-colors">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
                     </div>
 
                     <div className="p-6 bg-gray-50 overflow-y-auto custom-scrollbar">
-                        {/* Summary Bar with Gauge - UPDATED LAYOUT */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                             
-                            {/* NEW: FEAR AND GREED GAUGE */}
                             <div className="h-full">
                                 {renderHealthGauge(
                                     selectedPosData.data.length,
@@ -1143,7 +1235,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                 )}
                             </div>
 
-                            {/* Stats Grid */}
                             <div className="grid grid-cols-2 gap-4 h-full">
                                 <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex flex-col justify-center">
                                     <span className="block text-xs text-gray-500 uppercase font-bold mb-1">Total de Equipamentos</span>
@@ -1170,14 +1261,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                             </div>
                         </div>
 
-                        {/* Machine List Grid */}
                         <h4 className="text-sm font-bold text-gray-700 mb-3 uppercase tracking-wide">Detalhamento por Equipamento</h4>
                         <div className="grid grid-cols-1 gap-6">
                             {selectedPosData.data.map((machine, idx) => {
                                 const status = getHealthStatus(machine);
                                 return (
                                     <div key={idx} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                                        {/* Card Header with Status */}
                                         <div className={`px-4 py-3 border-b flex justify-between items-center ${status.label === 'CRÍTICO' ? 'bg-red-50 border-red-100' : (status.label === 'COMPROMETIDO' ? 'bg-orange-50 border-orange-100' : 'bg-gray-50 border-gray-100')}`}>
                                             <div className="flex items-center gap-3">
                                                  <div className={`w-3 h-3 rounded-full ${status.label === 'CRÍTICO' ? 'bg-red-500' : (status.label === 'OPERATIVO' ? 'bg-green-500' : 'bg-yellow-500')}`}></div>
@@ -1189,7 +1278,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             </span>
                                         </div>
 
-                                        {/* Card Body Metrics */}
                                         <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                                             <div>
                                                 <span className="text-xs text-gray-500 block mb-1">Wifi / Sinal</span>
@@ -1232,7 +1320,6 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                                             </div>
                                         </div>
 
-                                        {/* Footer / Analysis */}
                                         <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center">
                                              <div className="text-xs text-gray-500">
                                                  Firmware: <span className="font-mono">{machine.firmwareVersion}</span> | Incidents: {machine.incidents || 0}
@@ -1248,6 +1335,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
                     </div>
                     <div className="bg-gray-100 px-6 py-4 flex justify-end flex-shrink-0">
                         <button 
+                            type="button"
                             onClick={() => setPosModalOpen(false)}
                             className="bg-transparent border border-[#3483fa] text-[#3483fa] font-bold py-2 px-6 rounded-lg hover:bg-blue-50 transition-colors shadow-sm"
                         >
@@ -1258,125 +1346,125 @@ const SetupForm: React.FC<SetupFormProps> = ({ onGenerate, isLoading }) => {
             </div>
         )}
 
-        {/* POS Health Dashboard Modal - GLOBAL */}
         {globalHealthOpen && (
             <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md transition-opacity">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden transform transition-all scale-100 animate-fade-in-up flex flex-col max-h-[90vh]">
                     {/* Header */}
-                    <div className="bg-[#3483fa] px-6 py-5 flex justify-between items-start flex-shrink-0">
+                    <div className="bg-slate-800 px-6 py-5 flex justify-between items-start flex-shrink-0">
                         <div>
-                            <h2 className="text-xl font-bold text-white mb-1">Monitoramento Global de Parque</h2>
-                            <p className="text-blue-100 text-sm flex items-center">
-                                <span className="mr-2">Escopo:</span> 
-                                <span className="text-white font-semibold">Lista Atual de Importação</span>
-                                <span className="mx-2 text-blue-200">|</span>
-                                <span className="text-blue-100">{sheetData.length} Estabelecimentos Analisados</span>
+                            <h2 className="text-xl font-bold text-white mb-1">Monitoramento Global de Ativos</h2>
+                            <p className="text-slate-300 text-sm">
+                                Visão consolidada de {sheetData.length} estabelecimentos
                             </p>
                         </div>
-                        <button onClick={() => setGlobalHealthOpen(false)} className="text-white/80 hover:text-white transition-colors">
+                        <button type="button" onClick={() => setGlobalHealthOpen(false)} className="text-white/80 hover:text-white transition-colors">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
                     </div>
 
+                    {/* Body */}
                     <div className="p-6 bg-gray-50 overflow-y-auto custom-scrollbar">
-                        {(() => {
-                            const stats = getGlobalStats();
-                            return (
-                                <>
-                                    {/* Top Section: Gauge & Aggregates */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                                        <div className="h-full">
-                                            {renderHealthGauge(stats.totalMachines, stats.totalOperative)}
-                                        </div>
+                       {/* Calculation of stats */}
+                       {(() => {
+                           const allPos = sheetData.flatMap(r => (r.posData || []).map(p => ({...p, _companyName: r.Nome})));
+                           const total = allPos.length;
+                           const operative = allPos.filter(p => getHealthStatus(p).label === 'OPERATIVO').length;
+                           const critical = allPos.filter(p => getHealthStatus(p).label === 'CRÍTICO');
+                           const attention = allPos.filter(p => ['ATENÇÃO', 'COMPROMETIDO'].includes(getHealthStatus(p).label));
+                           
+                           return (
+                               <>
+                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                       <div className="h-full">
+                                           {renderHealthGauge(total, operative)}
+                                       </div>
+                                       <div className="grid grid-cols-2 gap-4 h-full">
+                                            {/* Summary Cards similar to individual modal but aggregated */}
+                                            <div className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-gray-500 uppercase font-bold mb-1">Total Parque</span>
+                                                <span className="text-3xl font-bold text-gray-800">{total}</span>
+                                            </div>
+                                            <div className="bg-green-50 p-3 rounded-lg border border-green-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-green-600 uppercase font-bold mb-1">Saudáveis</span>
+                                                <span className="text-3xl font-bold text-green-700">{operative}</span>
+                                            </div>
+                                            <div className="bg-red-50 p-3 rounded-lg border border-red-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-red-500 uppercase font-bold mb-1">Críticos</span>
+                                                <span className="text-3xl font-bold text-red-700">{critical.length}</span>
+                                            </div>
+                                            <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-100 shadow-sm flex flex-col justify-center">
+                                                <span className="block text-xs text-yellow-600 uppercase font-bold mb-1">Atenção</span>
+                                                <span className="text-3xl font-bold text-yellow-700">{attention.length}</span>
+                                            </div>
+                                       </div>
+                                   </div>
 
-                                        <div className="grid grid-cols-2 gap-4 h-full">
-                                            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-center">
-                                                <span className="block text-xs text-gray-500 uppercase font-bold mb-2">Total Equipamentos</span>
-                                                <span className="text-4xl font-bold text-gray-800">{stats.totalMachines}</span>
-                                            </div>
-                                            <div className="bg-green-50 p-4 rounded-xl border border-green-100 shadow-sm flex flex-col justify-center">
-                                                <span className="block text-xs text-green-600 uppercase font-bold mb-2">Operativos (Saudáveis)</span>
-                                                <span className="text-4xl font-bold text-green-700">{stats.totalOperative}</span>
-                                            </div>
-                                            <div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-sm flex flex-col justify-center">
-                                                <span className="block text-xs text-red-500 uppercase font-bold mb-2">Críticos / Total de Incidentes</span>
-                                                <span className="text-4xl font-bold text-red-700">
-                                                    {stats.totalCritical} <span className="text-red-400 mx-1">/</span> {stats.totalIncidents}
-                                                </span>
-                                            </div>
-                                            <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 shadow-sm flex flex-col justify-center">
-                                                <span className="block text-xs text-yellow-600 uppercase font-bold mb-2">Atenção (Sinal/Bobina)</span>
-                                                <span className="text-4xl font-bold text-yellow-700">{stats.totalAttention}</span>
-                                            </div>
-                                        </div>
-                                    </div>
+                                   {/* List of issues */}
+                                   <div className="space-y-6">
+                                       {critical.length > 0 && (
+                                           <div>
+                                               <h4 className="text-sm font-bold text-red-700 mb-3 uppercase tracking-wide flex items-center gap-2">
+                                                   <span className="w-2 h-2 rounded-full bg-red-600"></span> Prioridade Alta: Equipamentos Críticos ({critical.length})
+                                               </h4>
+                                               <div className="grid grid-cols-1 gap-3">
+                                                   {critical.map((machine, idx) => (
+                                                       <div key={'crit-'+idx} className="bg-white rounded-lg border border-red-100 shadow-sm p-3 flex justify-between items-center hover:bg-red-50 transition-colors">
+                                                           <div>
+                                                               <div className="font-bold text-gray-800 text-sm">{(machine as any)._companyName}</div>
+                                                               <div className="text-xs text-red-600 font-mono mt-0.5">ID: {machine.machineId} • {machine.model}</div>
+                                                           </div>
+                                                           <div className="text-right">
+                                                               <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-1 rounded">Erro: {machine.errorRate}%</span>
+                                                               <div className="text-[10px] text-gray-500 mt-1">{getHealthAnalysis(machine)}</div>
+                                                           </div>
+                                                       </div>
+                                                   ))}
+                                               </div>
+                                           </div>
+                                       )}
 
-                                    {/* Breakdown Section: Top Problematic Stores */}
-                                    <h4 className="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wide flex items-center">
-                                        <svg className="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                                        Top Lojas com Problemas Críticos
-                                    </h4>
-                                    
-                                    {stats.criticalStores.length > 0 ? (
-                                        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                                            <table className="min-w-full divide-y divide-gray-200">
-                                                <thead className="bg-gray-50">
-                                                    <tr>
-                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Empresa</th>
-                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Máquinas Críticas</th>
-                                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ação</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="bg-white divide-y divide-gray-200">
-                                                    {stats.criticalStores.slice(0, 10).map((store, idx) => (
-                                                        <tr key={idx} className="hover:bg-red-50/30 transition-colors">
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                                                {store.name}
-                                                            </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-bold">
-                                                                {store.count}
-                                                            </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                                <button 
-                                                                    onClick={() => {
-                                                                        const row = sheetData.find(r => r.Nome === store.name);
-                                                                        if (row) {
-                                                                            setGlobalHealthOpen(false);
-                                                                            openPosModal(row);
-                                                                        }
-                                                                    }}
-                                                                    className="text-blue-600 hover:text-blue-900 hover:underline font-medium"
-                                                                >
-                                                                    Ver Detalhes
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                            {stats.criticalStores.length > 10 && (
-                                                <div className="bg-gray-50 px-6 py-3 text-xs text-gray-500 text-center border-t border-gray-200">
-                                                    E mais {stats.criticalStores.length - 10} lojas com problemas...
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center text-green-800">
-                                            <p className="font-bold text-lg">Excelente!</p>
-                                            <p className="text-sm">Nenhuma loja apresenta máquinas com status crítico no momento.</p>
-                                        </div>
-                                    )}
-                                </>
-                            );
-                        })()}
+                                       {attention.length > 0 && (
+                                           <div>
+                                               <h4 className="text-sm font-bold text-yellow-700 mb-3 uppercase tracking-wide flex items-center gap-2">
+                                                   <span className="w-2 h-2 rounded-full bg-yellow-500"></span> Atenção Necessária ({attention.length})
+                                               </h4>
+                                               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                   {attention.map((machine, idx) => (
+                                                       <div key={'att-'+idx} className="bg-white rounded-lg border border-yellow-100 shadow-sm p-3 flex justify-between items-center hover:bg-yellow-50 transition-colors">
+                                                           <div>
+                                                               <div className="font-bold text-gray-800 text-sm">{(machine as any)._companyName}</div>
+                                                               <div className="text-xs text-gray-500 font-mono mt-0.5">ID: {machine.machineId}</div>
+                                                           </div>
+                                                           <div className="text-right">
+                                                               <div className="text-xs font-medium text-yellow-700">{getHealthAnalysis(machine)}</div>
+                                                           </div>
+                                                       </div>
+                                                   ))}
+                                               </div>
+                                           </div>
+                                       )}
+                                       
+                                       {critical.length === 0 && attention.length === 0 && (
+                                           <div className="text-center py-10 bg-green-50 rounded-xl border border-green-100">
+                                               <div className="text-4xl mb-2">🎉</div>
+                                               <h3 className="text-green-800 font-bold">Parque 100% Saudável</h3>
+                                               <p className="text-green-600 text-sm">Nenhum equipamento requer atenção imediata.</p>
+                                           </div>
+                                       )}
+                                   </div>
+                               </>
+                           );
+                       })()}
                     </div>
                     
+                    {/* Footer */}
                     <div className="bg-gray-100 px-6 py-4 flex justify-end flex-shrink-0">
                         <button 
+                            type="button"
                             onClick={() => setGlobalHealthOpen(false)}
-                            className="bg-transparent border border-[#3483fa] text-[#3483fa] font-bold py-2 px-6 rounded-lg hover:bg-blue-50 transition-colors shadow-sm"
+                            className="bg-transparent border border-slate-400 text-slate-600 font-bold py-2 px-6 rounded-lg hover:bg-slate-200 transition-colors shadow-sm"
                         >
-                            Fechar
+                            Fechar Painel
                         </button>
                     </div>
                 </div>
