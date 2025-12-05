@@ -89,6 +89,10 @@ export interface RouteStop {
   };
   estimatedArrival: string;
   durationMinutes: number; 
+  // Novos campos de deslocamento
+  distanceToNext?: string; // ex: "5.2 km"
+  travelTimeToNext?: string; // ex: "15 min"
+  // ---
   notes: string;
   risks: {
     flood: boolean;

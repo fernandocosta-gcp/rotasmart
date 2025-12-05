@@ -342,6 +342,8 @@ export const generateRoutePlan = async (
                 "address": "Endereço Completo",
                 "estimatedArrival": "HH:MM",
                 "durationMinutes": 45,
+                "distanceToNext": "5.2 km",  // NOVA REGRA: Calcule a distância para a PRÓXIMA parada. Se for a última, pode ser null ou distância para o retorno.
+                "travelTimeToNext": "15 min", // NOVA REGRA: Calcule o tempo de viagem para a PRÓXIMA parada.
                 "notes": "Justificativa",
                 "risks": { "flood": false, "towing": false, "security": false },
                 "weather": { "temp": "25°C", "condition": "Sol" }
