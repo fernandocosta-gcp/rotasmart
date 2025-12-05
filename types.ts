@@ -111,6 +111,11 @@ export interface RouteStop {
 export interface DailyItinerary {
   dayLabel: string; 
   date: string;
+  // Campos adicionados para filtro de UI
+  collaboratorName?: string;
+  collaboratorId?: string;
+  teamName?: string;
+  // ---
   summary: string;
   totalDistanceKm: string;
   totalTimeHours: string;
@@ -158,6 +163,7 @@ export interface ServiceRegion {
 export interface Team {
   id: string;
   name: string;
+  officeAddress?: string; // Novo Campo: Endereço da base
   isActive: boolean;
   maxActivitiesPerRoute?: number; // Novo Campo
   regions: ServiceRegion[];

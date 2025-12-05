@@ -6,68 +6,71 @@ O diferencial deste projeto não é apenas calcular a menor distância, mas ente
 
 ---
 
-## 🧠 A Estratégia Algorítmica (Gemini VRP)
+## ⚙️ Engenharia e Algoritmos
 
-Ao contrário de roteirizadores tradicionais que usam apenas geometria, este sistema utiliza o Google Gemini 2.5 Flash simulando um **VRP Solver (Vehicle Routing Problem)** através de uma engenharia de prompt avançada.
+O núcleo do sistema utiliza uma abordagem híbrida de Engenharia de Software Tradicional e AI Generativa para resolver problemas logísticos complexos.
 
-A instrução enviada à IA segue a metodologia **"Cluster-First, Route-Second"**, combinada com heurísticas de refinamento:
+### 1. Smart Retry with Fallback (Resiliência)
+Para garantir alta disponibilidade mesmo sob carga ou instabilidade da API do Gemini, implementamos um padrão de **Retentativa Inteligente com Degradação Graciosa**:
+1.  **Tentativa Otimista:** O sistema tenta gerar a rota completa utilizando todas as ferramentas (`Google Maps` para distâncias + `Google Search` para previsão do tempo e riscos).
+2.  **Detecção de Erro:** Caso a API retorne erro 500 (Internal Error) ou Timeout devido à complexidade do contexto.
+3.  **Backoff Exponencial:** O sistema aguarda um tempo progressivo (2s, 4s...) antes de tentar novamente.
+4.  **Fallback (Degradação):** Nas tentativas subsequentes, o sistema **remove ferramentas não essenciais** (como o Google Search). Isso reduz drasticamente a carga computacional, garantindo que o usuário receba a rota (o produto principal), mesmo que sem os metadados de clima.
 
-1.  **Cluster-First:** Agrupa visitas por bairros/zonas para evitar deslocamentos pendulares.
-2.  **Time-Windows:** Respeita rigorosamente horários de abertura/fechamento e pausas de almoço.
-3.  **Análise de Risco:** Avalia semanticamente o endereço para alertar sobre áreas de alagamento, risco de segurança ou zonas de guincho.
+### 2. CVRPTW via Prompt Engineering
+O sistema simula um solver de **CVRPTW (Capacitated Vehicle Routing Problem with Time Windows)**, um problema clássico de pesquisa operacional geralmente resolvido pelo *Google OR-Tools*.
+*   Ao invés de codificar as restrições matematicamente, instruímos o LLM a atuar como um solver logístico.
+*   **Restrições Rígidas (Hard Constraints):** Janelas de tempo (Abertura/Fechamento), Capacidade do Veículo (Máx. visitas) e Dias de Folga.
+*   **Restrições Suaves (Soft Constraints):** Preferência de almoço e minimização de custos de estacionamento.
 
----
-
-## 👥 Gestão de Equipes e Território (Novo!)
-
-O sistema conta com um módulo completo de **Gestão de Recursos Humanos e Territoriais**, permitindo o cadastro de times e a visualização estratégica da cobertura operacional.
-
-### 1. Cadastro de Equipes e Colaboradores
-Organize sua força de trabalho com detalhes logísticos precisos:
-*   **Parâmetros de Equipe:** Definição de "Máximo de Atividades por Roteiro" e Regiões de Atuação (Bairro/Cidade).
-*   **Perfil do Colaborador:**
-    *   **Jornada:** Escala de trabalho semanal (dias úteis, folgas) e horários de entrada/saída.
-    *   **Transporte:** Indicação se utiliza carro próprio ou transporte público, incluindo dia de rodízio municipal.
-    *   **Logística Pessoal:** Definição de endereços de partida e retorno customizados (casa do colaborador vs. sede da empresa).
-
-### 2. Mapa de Calor de Cobertura (Heatmap Analytics)
-Uma ferramenta visual estratégica para gerentes de operações:
-*   **Geocodificação via IA:** Utiliza o Gemini (Google Maps Grounding) para converter listas de "Bairro - Cidade" em coordenadas geográficas em lote.
-*   **Visualização de Densidade:** Um mapa térmico interativo (Leaflet) plota a intensidade de cobertura baseada no número de colaboradores alocados em cada região.
-*   **Tomada de Decisão:** Permite identificar visualmente "zonas frias" (áreas descobertas) ou "zonas quentes" (sobreposição de equipes) para rebalanceamento territorial.
+### 3. Heurística A* (A-Star) e Nearest Neighbor
+Instruímos o modelo a utilizar conceitos do algoritmo **A* (A-Star)** para determinação de caminho entre nós e a heurística **Nearest Neighbor** para sequenciamento:
+*   O sistema penaliza "saltos" longos entre bairros distantes.
+*   Utiliza lógica "Cluster-First" (Agrupar primeiro) para criar densidade geográfica antes de traçar a rota fina, imitando o comportamento de algoritmos de otimização de grafos.
 
 ---
 
-## 📊 Inteligência de Dados e Machine Learning
+## 🧠 Lógica de Negócio e Priorização
 
-O sistema vai além do roteamento, atuando como um **Analista de Negócios** via Aprendizado de Máquina Não-Supervisionado executado diretamente no navegador.
+O sistema não é passivo; ele toma decisões de prioridade baseadas na saúde dos ativos (IoT) e regras de negócio.
+
+### Prioridade Híbrida (Hybrid Priority Logic)
+A definição de quem visitar primeiro segue uma lógica de "Waterfalls":
+1.  **Prioridade Explícita:** Se a planilha importada contém uma coluna "Prioridade" (Alta, Média, Baixa), esta prevalece sobre tudo.
+2.  **Prioridade Automática (Data-Driven):** Se nenhuma prioridade é informada, o sistema analisa os dados de telemetria das máquinas (POS):
+    *   **CRÍTICO (Alta Prioridade):** Taxa de erro > 6% ou Bateria < 15%. O sistema entende que há risco iminente de *churn* (cancelamento).
+    *   **ATENÇÃO (Média Prioridade):** Bobina de papel acabando ou Sinal Wifi instável.
+    *   **NORMAL:** Equipamentos operando dentro dos parâmetros.
+
+### Capacidade Operacional Líquida
+O indicador de "Capacidade Restante" no dashboard não é apenas uma subtração simples. Ele considera:
+*   **Fator Humano:** Apenas colaboradores marcados como "Ativos" e que **não estão de férias** entram no cálculo.
+*   **Carga Variável:** `Capacidade Total = Σ (Colaboradores Ativos * Configuração Individual de Máx Visitas)`.
+*   **Health Score:** O percentual exibido (`% da Demanda`) indica se a equipe atual consegue absorver o volume de visitas importado sem gerar horas extras excessivas.
+
+---
+
+## 👥 Gestão de Colaboradores e Impacto na Rota
+
+O cadastro do colaborador influencia diretamente o custo e a geometria da rota gerada:
+
+1.  **Modo de Transporte:**
+    *   *Carro/Moto:* O algoritmo considera trânsito de vias rápidas e alerta sobre estacionamento.
+    *   *A pé/Transporte Público:* O algoritmo prioriza rotas com menor distância linear e ignora sentidos de via (mão única), focando em clusters de alta densidade (vários clientes na mesma rua).
+2.  **Pontos de Ancoragem (Depots):**
+    *   **Start Location:** Define o nó inicial do grafo. Se o colaborador sai de casa direto para o cliente, a rota é otimizada para essa vizinhança, economizando o deslocamento até a sede.
+    *   **End Location:** Define se o colaborador deve retornar à base (fechamento de caixa/estoque) ou se está liberado no último cliente.
+3.  **Carteira (Portfolio):**
+    *   O sistema realiza um "Fuzzy Match" (comparação aproximada de texto) entre a lista de clientes importada e a carteira do colaborador. Se houver match, a IA é instruída a forçar a atribuição para aquele membro, respeitando o relacionamento comercial existente.
+
+---
+
+## 📊 Inteligência de Dados (Machine Learning)
 
 ### Segmentação Automática (K-Means Clustering)
 Implementamos o algoritmo **K-Means** (Unsupervised Learning) para descobrir padrões ocultos na base de clientes sem necessidade de categorização manual prévia.
-
-*   **Vetores de Análise:** O algoritmo cruza *Faturamento Médio*, *Horário de Abertura*, *Horário de Fechamento* e *Duração da Operação*.
-*   **Perfis Dinâmicos:** O sistema agrupa e rotula automaticamente os estabelecimentos em perfis estratégicos:
-    *   **💰 Alto Desempenho:** Líderes de receita em horário comercial.
-    *   **☕ Manhã Premium:** Lojas com alto fluxo matinal.
-    *   **🏪 Operação Estendida:** Estabelecimentos com longas jornadas (madrugada/noite).
-    *   **📉 Baixo Desempenho:** Oportunidades de crescimento ou risco de churn.
-
----
-
-## 🛠️ Funcionalidades para Field Service (FSR)
-
-Focado na eficiência do técnico de campo (Field Service Representative), o sistema oferece ferramentas de diagnóstico e logística fina.
-
-### 1. Monitoramento de Saúde POS (IoT Digital Twin)
-Um dashboard completo para monitoramento preventivo do parque de máquinas de cartão (POS).
-*   **Métricas em Tempo Real:** Monitora Nível de Bateria, Sinal Wifi/4G, Taxa de Erros e Status da Bobina (Papel).
-*   **Índice de Operacionalidade:** Um gráfico de "medidor" (Gauge Chart) resume a saúde geral do cliente ou da rota.
-*   **Manutenção Preditiva:** O sistema alerta sobre máquinas críticas antes da visita.
-
-### 2. Validação de Transporte Público (Bus Stop Grounding)
-Integração profunda com **Google Maps** via Gemini Tools para enriquecimento de endereço e mobilidade urbana.
-*   **Varredura de Raio:** O sistema analisa um raio de 300 metros das coordenadas do cliente.
-*   **Substituição Inteligente:** Se um ponto de ônibus é identificado, o sistema pode substituir o endereço logístico pela referência do ponto.
+*   **Vetores de Análise:** Faturamento Médio, Horário de Abertura, Horário de Fechamento e Duração da Operação.
+*   **Perfis Dinâmicos:** Identifica perfis como "Alto Desempenho", "Manhã Premium" e "Operação Estendida".
 
 ---
 

@@ -1,7 +1,16 @@
+
 import { GoogleGenAI } from "@google/genai";
-import { RawSheetRow, UserPreferences, MultiDayPlan, Team } from "../types";
+import { RawSheetRow, UserPreferences, MultiDayPlan, Team, TeamMember, DailyItinerary } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// --- HELPERS ---
+const getDayOfWeekPT = (dateString: string): string => {
+    // Cria data garantindo timezone correto (append T12:00 para evitar flutuação de fuso)
+    const date = new Date(`${dateString}T12:00:00`);
+    const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    return days[date.getDay()];
+};
 
 // --- DEFAULT RULES CONSTANT ---
 export const DEFAULT_DISTRIBUTION_RULES = `1. **Primary Match (Team):** If an activity's Neighborhood AND City match a Team's configured region, assign it to that Team.
@@ -17,7 +26,6 @@ export const DEFAULT_DISTRIBUTION_RULES = `1. **Primary Match (Team):** If an ac
 export const getRegionCoordinates = async (regions: string[]): Promise<Record<string, { lat: number, lng: number }>> => {
   if (regions.length === 0) return {};
 
-  // Remove duplicates and limit batch size if necessary (handling reasonably sized lists)
   const uniqueRegions = Array.from(new Set(regions));
   
   const prompt = `
@@ -55,7 +63,6 @@ export const getRegionCoordinates = async (regions: string[]): Promise<Record<st
       let text = response.text;
       if(!text) return {};
 
-      // Manual JSON extraction
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
           text = jsonMatch[0];
@@ -68,15 +75,10 @@ export const getRegionCoordinates = async (regions: string[]): Promise<Record<st
   }
 };
 
-// Nova função para verificar ônibus na fase de Setup
 export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<string, string>> => {
-  // Filtra apenas linhas com endereço válido
   const validRows = rows.filter(r => r.Endereco && r.Endereco.length > 5);
   if (validRows.length === 0) return {};
 
-  // Para evitar sobrecarregar o contexto, processamos em lotes de 15 se necessário, 
-  // mas aqui faremos um prompt único otimizado.
-  // UPDATE: Construção de endereço mais robusta (Endereço + Bairro + Município)
   const locations = validRows.map(r => {
       const fullAddress = [r.Endereco, r.Bairro, r.Municipio].filter(Boolean).join(", ");
       return `ID: ${r.id} | Address: ${fullAddress}`;
@@ -103,14 +105,12 @@ export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<st
         contents: prompt,
         config: {
           tools: [{ googleMaps: {} }],
-          // responseMimeType: 'application/json' // REMOVED: Unsupported with Google Maps tool
         }
       });
       
       let text = response.text;
       if(!text) return {};
 
-      // Manual JSON extraction since we can't enforce MIME type
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
           text = jsonMatch[0];
@@ -123,17 +123,14 @@ export const batchCheckBusStops = async (rows: RawSheetRow[]): Promise<Record<st
   }
 };
 
-// --- NEW FUNCTION: AI Distribution ---
 export const distributeActivities = async (
     activities: RawSheetRow[], 
     teams: Team[],
-    customRules?: string // Optional custom rules injection
+    customRules?: string
 ): Promise<Record<string, { teamId: string, memberId: string, reason: string }>> => {
     
-    // Simplificar dados para o prompt (economia de tokens)
     const simplifiedActivities = activities.map(a => ({
         id: a.id,
-        // Send FULL address concatenated to avoid separation issues
         fullAddress: [a.Endereco, a.Bairro, a.Municipio].filter(Boolean).join(", "),
         businessHours: a.HorarioAbertura && a.HorarioFechamento ? `${a.HorarioAbertura}-${a.HorarioFechamento}` : 'Any'
     }));
@@ -142,14 +139,12 @@ export const distributeActivities = async (
         id: t.id,
         name: t.name,
         regions: t.regions.map(r => `${r.neighborhood} (${r.city})`).join(', '),
-        // Include detailed member info for selection logic
         members: t.members.map(m => ({
             id: m.id,
             name: m.name,
             isOnVacation: m.isOnVacation,
             startLocation: m.preferredStartLocation || 'Headquarters',
             endLocation: m.preferredEndLocation || 'Headquarters',
-            // Summarize schedule (just Mon-Fri for brevity context)
             scheduleSummary: m.schedule
                 .filter(s => !s.isDayOff)
                 .map(s => `${s.dayOfWeek.substr(0,3)}:${s.startTime}-${s.endTime}`)
@@ -157,7 +152,6 @@ export const distributeActivities = async (
         }))
     }));
 
-    // Use custom rules if provided, otherwise default
     const activeRules = customRules && customRules.trim().length > 0 
         ? customRules 
         : DEFAULT_DISTRIBUTION_RULES;
@@ -192,9 +186,7 @@ export const distributeActivities = async (
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
-            config: {
-                // responseMimeType: 'application/json' 
-            }
+            config: {}
         });
 
         let text = response.text;
@@ -216,249 +208,237 @@ export const distributeActivities = async (
 export const generateRoutePlan = async (
   sheetData: RawSheetRow[],
   preferences: UserPreferences,
-  currentCoords?: { lat: number; lng: number }
+  currentCoords?: { lat: number; lng: number },
+  teams: Team[] = [] 
 ): Promise<MultiDayPlan> => {
   
-  const stopsList = sheetData.map(row => {
-    let priorityNote = "";
-    if (row.priority === 'high') priorityNote = " [PRIORIDADE ALTA: Visitar no início do roteiro]";
-    if (row.priority === 'medium') priorityNote = " [PRIORIDADE MÉDIA: Importante mas flexível]";
-    if (row.priority === 'lunch') priorityNote = " [VISITA DE ALMOÇO: Agendar próximo de 12:00-13:00]";
-    if (row.priority === 'end_of_day') priorityNote = " [FIM DO DIA: Agendar como uma das últimas visitas]";
-    
-    const timeConstraints = (row.HorarioAbertura || row.HorarioFechamento) 
-      ? ` (Horário: ${row.HorarioAbertura || '?'} às ${row.HorarioFechamento || '?'})` 
-      : '';
+  // 1. Agrupar dados por Membro Atribuído
+  const assignedData = sheetData.filter(r => r.assignedMemberId);
+  const memberGroups: Record<string, RawSheetRow[]> = {};
+  
+  assignedData.forEach(row => {
+      const mId = row.assignedMemberId!;
+      if (!memberGroups[mId]) memberGroups[mId] = [];
+      memberGroups[mId].push(row);
+  });
+
+  // 2. Preparar Prompts em Paralelo para cada Membro
+  const groupKeys = Object.keys(memberGroups);
+  
+  const routePromises = groupKeys.map(async (memberId) => {
+      const rows = memberGroups[memberId];
+      if (rows.length === 0) return null;
+
+      // Buscar dados do membro e equipe
+      let memberName = "Roteiro Geral";
+      let teamName = "Equipe Padrão";
+      let memberContext = "";
+      let transportMode = "Carro (Padrão)";
+      let scheduleWarnings = "";
       
-    // Include custom parking info if present
-    const parkingInfo = row.customParkingInfo 
-      ? ` [INFO ESTACIONAMENTO: ${row.customParkingInfo}]` 
-      : '';
-    
-    // Pass pre-checked bus info to Gemini to save tokens/time
-    const busInfo = row.nearbyBusStop 
-      ? ` [BUS STOP CHECKED: ${row.nearbyBusStop}]` 
-      : '';
-
-    // Pass assigned team info if available (Gemini can use this to group or filter if we wanted, but mainly for context)
-    const teamInfo = row.assignedTeamId ? ` [EQUIPE ATRIBUIDA ID: ${row.assignedTeamId}]` : '';
-
-    // Utilizar endereço completo também na geração de rota para melhor precisão
-    const fullAddress = [row.Endereco, row.Bairro, row.Municipio].filter(Boolean).join(", ") || 'Endereço não especificado';
-
-    return `- ${row.Nome} (${fullAddress}) - Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}${parkingInfo}${busInfo}${teamInfo}`;
-  }).join('\n');
-
-  // Determine locations
-  const startLocationStr = preferences.useCurrentLocation 
-    ? 'Minha localização atual (lat/long fornecida)' 
-    : preferences.startLocation;
-
-  const endLocationStr = preferences.returnToStart 
-    ? startLocationStr 
-    : preferences.endLocation;
-
-  // Build Office Instruction
-  let officeInstruction = "NÃO";
-  if (preferences.officeSettings.enabled) {
-      const freqMap: Record<string, string> = {
-          'all_days': 'Todos os dias da rota',
-          'first_day': 'Apenas no 1º dia',
-          'last_day': 'Apenas no último dia da rota'
-      };
-      const timingMap: Record<string, string> = {
-          'morning': 'Manhã (após a saída)',
-          'lunch': 'Próximo ao almoço',
-          'afternoon': 'Final da tarde (antes do encerramento)'
-      };
+      // Encontrar membro na estrutura de times
+      let foundMember: TeamMember | undefined;
+      let foundTeam: Team | undefined;
       
-      officeInstruction = `SIM.
-      - Frequência: ${freqMap[preferences.officeSettings.frequency]}
-      - Horário Preferencial: ${timingMap[preferences.officeSettings.timing]}
-      - Duração da parada: ${preferences.officeSettings.durationMinutes} minutos`;
-  }
+      for (const t of teams) {
+          const m = t.members.find(x => x.id === memberId);
+          if (m) {
+              foundMember = m;
+              foundTeam = t;
+              break;
+          }
+      }
 
-  // Lunch constraint logic
-  const lunchInstruction = preferences.needsLunch 
-    ? `SIM (Duração: ${preferences.lunchDurationMinutes} min).
-       *** REGRA CRÍTICA DE ALMOÇO (HARD CONSTRAINT) ***
-       - O intervalo de almoço DEVE OBRIGATORIAMENTE ocorrer DENTRO da janela das 11:50 às 14:00.
-       - É PROIBIDO agendar o almoço antes das 11:50 (ex: 10:55 é inaceitável).
-       - É PROIBIDO que o almoço termine após as 14:00.
-       - Você deve manipular a ordem das visitas para que haja um "buraco" na agenda neste horário. Se necessário, insira tempo de deslocamento ou espera.` 
-    : 'NÃO';
+      if (foundMember) {
+          memberName = foundMember.name;
+          teamName = foundTeam?.name || "Equipe";
+          transportMode = foundMember.transportMode || (foundMember.usesCar ? 'Carro' : 'Transporte Público');
+          
+          const workingDays = foundMember.schedule.filter(s => !s.isDayOff).map(s => s.dayOfWeek);
+          const offDays = foundMember.schedule.filter(s => s.isDayOff).map(s => s.dayOfWeek);
+          
+          const scheduleStr = foundMember.schedule
+              .filter(s => !s.isDayOff)
+              .map(s => `${s.dayOfWeek}: ${s.startTime}-${s.endTime}`)
+              .join('; ');
 
-  const prompt = `
-    Atue como um Solver de Roteirização Avançado (VRP) E um Especialista em Meteorologia Logística.
-    
-    OBJETIVO: Criar um cronograma de visitas otimizado, minimizando tempo/distância e MAXIMIZANDO A SEGURANÇA e PRECISÃO CLIMÁTICA.
-    
-    DADOS DO PLANEJAMENTO:
-    - Data da Rota: ${preferences.departureDate} (CRÍTICO: Busque a previsão específica para esta data)
-    - Início: ${preferences.departureTime}
-    - Fim Máximo: ${preferences.returnTime}
-    - Duração Visita: ${preferences.visitDurationMinutes} min
-    - Partida: ${startLocationStr}
-    - Chegada: ${endLocationStr}
-    
-    PARADAS ESPECIAIS:
-    - Almoço: ${lunchInstruction}
-    - Escritório: ${officeInstruction}
-    - Estacionamento Preferido: ${preferences.parkingPreference}
+          // VERIFICAÇÃO DE FOLGA (CRÍTICO)
+          const startDayOfWeek = getDayOfWeekPT(preferences.departureDate);
+          const isStartingOnDayOff = offDays.includes(startDayOfWeek as any);
+          
+          let dayOffInstruction = "";
+          if (isStartingOnDayOff) {
+              dayOffInstruction = `ATENÇÃO: A data solicitada (${preferences.departureDate} - ${startDayOfWeek}) é um dia de FOLGA para ${foundMember.name}. NÃO GERE ROTEIRO PARA ${startDayOfWeek}. Comece o agendamento no próximo dia útil permitido (${workingDays.join(', ')}).`;
+          }
 
-    LISTA DE CLIENTES:
-    ${stopsList}
+          memberContext = `
+          - **NOME COLABORADOR:** ${foundMember.name}
+          - **MEIO DE LOCOMOÇÃO:** ${transportMode} (Afeta velocidade média e estacionamento).
+          - **JORNADA DE TRABALHO:** ${scheduleStr}.
+          - **DIAS DE FOLGA (PROIBIDO AGENDAR):** ${offDays.join(', ')}.
+          - **PONTO DE PARTIDA:** ${foundMember.preferredStartLocation || preferences.startLocation || 'Sede'}.
+          - **PONTO DE RETORNO:** ${foundMember.returnToStart ? (foundMember.preferredStartLocation || preferences.startLocation) : (foundMember.preferredEndLocation || preferences.endLocation)}.
+          - **INSTRUÇÃO DE DATA:** ${dayOffInstruction}
+          `;
+      }
 
-    --- INSTRUÇÕES DE CUSTOS (FINANCEIRO) ---
-    Você deve estimar os custos do dia baseando-se nestes parâmetros:
-    1. **Combustível:** Considere um Carro Popular 1.0 a Gasolina (10 km/L, R$ 6,00/L).
-    2. **Estacionamento:** 'paid' (R$ 15/parada), 'blue_zone' (R$ 6/parada), 'street' (R$ 0).
+      // Preparar lista de paradas com metadados para a IA
+      const stopsList = rows.map(row => {
+        let priorityNote = "";
+        if (row.priority === 'high') priorityNote = " [PRIORIDADE ALTA]";
+        if (row.priority === 'lunch') priorityNote = " [ALMOÇO]";
+        
+        const timeConstraints = (row.HorarioAbertura || row.HorarioFechamento) 
+          ? ` (Janela: ${row.HorarioAbertura || '?'} - ${row.HorarioFechamento || '?'})` 
+          : '';
+          
+        const fullAddress = [row.Endereco, row.Bairro, row.Municipio].filter(Boolean).join(", ");
+        const posInfo = row.posData ? `POS:${row.posData.length}` : 'POS:0';
 
-    --- INSTRUÇÕES METEOROLÓGICAS (CRÍTICO - VARIAÇÃO TEMPORAL) ---
-    Para CADA parada, você DEVE fornecer a temperatura EXATA prevista para o HORÁRIO DE CHEGADA estimado.
-    NÃO utilize faixas de temperatura (ex: "25-30°C") e NÃO repita a mesma temperatura para o dia todo.
-    
-    Lógica Obrigatória:
-    1. Use a ferramenta de busca para: "hourly weather forecast [City] [Date]".
-    2. Se não encontrar o dado exato, aplique a curva térmica padrão:
-       - Manhã (08:00-10:00): Temperatura mais baixa.
-       - Meio do Dia (12:00-15:00): Pico de calor (Temperatura Máxima).
-       - Final da Tarde (16:00+): Ligeira queda.
-    
-    Preencha o objeto 'weather':
-    - temp: Valor único (ex: "19°C" para uma visita às 08:30, "29°C" para uma visita às 14:00).
-    - condition: Condição real do horário (ex: "Neblina" de manhã, "Sol Forte" à tarde).
-    - chanceOfRain: Probabilidade de chuva (ex: "10%", "80%").
-    - isStormy: true se houver previsão de tempestade, chuva torrencial ou granizo naquele horário específico.
+        return `- ID: ${row.id} | ${row.Nome} (${fullAddress}) | ${posInfo} | Obs: ${row.Observacoes || ''}${timeConstraints}${priorityNote}`;
+      }).join('\n');
 
-    --- INSTRUÇÕES DE MOBILIDADE URBANA (TRANSPORTE PÚBLICO) ---
-    Para CADA endereço:
-    1. Se o campo "BUS STOP CHECKED" já estiver presente na descrição do cliente, USE-O.
-    2. Se NÃO estiver presente, UTILIZE a ferramenta do Google Maps para investigar arredores (raio 300m).
-    
-    Campo 'nearbyBusStop' (OBRIGATÓRIO):
-    - Se encontrar: Retorne o nome do ponto ou "Ponto na [Nome da Rua] (aprox. Xm)".
-    - Se NÃO encontrar no raio de 300m: Retorne exatamente a string "Nenhum ponto de ônibus num raio de 300m".
+      const lunchInstruction = preferences.needsLunch 
+        ? `SIM (${preferences.lunchDurationMinutes} min).` 
+        : 'NÃO';
 
-    --- INSTRUÇÕES DE ANÁLISE DE RISCO ---
-    Para CADA parada, avalie o endereço e horário:
-    1. **Security:** Bairro perigoso ou horário de risco?
-    2. **Flood:** Área de alagamento? (Cruze com a previsão do tempo: Se isStormy=true E flood=true, destaque o risco na descrição).
-    3. **Towing:** Risco de guincho?
-    4. **Description:** Explique o risco.
+      const prompt = `
+        Atue como um **Arquiteto de Soluções de Otimização Logística**.
 
-    --- ALGORITMO DE OTIMIZAÇÃO APLICADO ---
-    1. **Cluster-First:** Agrupe por bairros.
-    2. **Time-Windows:** Verifique RIGOROSAMENTE a janela de almoço (11:50-14:00). Se a sequência natural colocar o almoço às 11:00, force uma troca de ordem para empurrá-lo para depois das 11:50.
-    3. **Nearest Neighbor:** Minimize deslocamentos.
+        **OBJETIVO:** Gerar um roteiro para o colaborador **${memberName}**.
 
-    FORMATO DE RESPOSTA (JSON Array):
-    Retorne APENAS o JSON.
-    [
-      {
-        "dayLabel": "Dia 1",
-        "date": "YYYY-MM-DD",
-        "summary": "Resumo da rota...",
-        "totalDistanceKm": "X km",
-        "totalTimeHours": "X h",
-        "estimatedFuelCost": "R$ XX,XX",
-        "estimatedParkingCost": "R$ XX,XX",
-        "stops": [
+        **CONTEXTO:**
+        ${memberContext || `- Horários: Saída ${preferences.departureTime}, Retorno ${preferences.returnTime}.`}
+        - Data Início: ${preferences.departureDate} (${getDayOfWeekPT(preferences.departureDate)})
+        - Tempo Médio Visita: ${preferences.visitDurationMinutes} min
+        - Almoço: ${lunchInstruction}
+
+        **REGRAS OBRIGATÓRIAS (HARD RULES):**
+        1. **LISTA COMPLETA:** Você recebeu ${rows.length} locais. Você DEVE retornar um roteiro contendo EXATAMENTE ${rows.length} visitas.
+        2. **DIAS DE FOLGA:** Respeite rigorosamente os dias de folga do colaborador. Se a data de início for folga, pule para o próximo dia útil.
+        3. **NÃO FILTRE:** Não remova empresas por falta de tempo. Se a jornada estourar, agende como hora extra ou mova para o dia seguinte (desde que seja dia útil), mas NÃO OMITA a visita do JSON.
+        4. **SEQUÊNCIA:** Use lógica "Nearest Neighbor" e "Cluster-First" para minimizar deslocamento.
+
+        **LISTA DE ATIVIDADES (OBRIGATÓRIO VISITAR TODAS):**
+        ${stopsList}
+
+        **FORMATO DE SAÍDA (JSON):**
+        Retorne um Array de Dias.
+        [
           {
-            "id": "uuid",
-            "order": 1,
-            "name": "Nome",
-            "type": "Cliente",
-            "address": "Endereço Completo",
-            "estimatedArrival": "HH:MM",
-            "durationMinutes": ${preferences.visitDurationMinutes},
-            "notes": "Obs logística",
-            "risks": { 
-                "flood": boolean, 
-                "towing": boolean, 
-                "security": boolean, 
-                "description": "Texto explicativo" 
-            },
-            "weather": {
-                "temp": "25°C", 
-                "condition": "Nublado",
-                "chanceOfRain": "10%",
-                "isStormy": false
-            },
-            "nearbyBusStop": "String OBRIGATÓRIA (Descrição ou 'Nenhum ponto...')",
-            "parkingSuggestion": "Dica de estacionamento",
-            "phoneNumber": "Telefone",
-            "coordinates": { "lat": 0, "lng": 0 }
+            "dayLabel": "Dia 1 - Seg (ou o dia correto)",
+            "date": "YYYY-MM-DD",
+            "summary": "Resumo...",
+            "totalDistanceKm": "X km",
+            "totalTimeHours": "X h",
+            "estimatedFuelCost": "R$ 0,00",
+            "estimatedParkingCost": "R$ 0,00",
+            "stops": [
+              {
+                "id": "ID da atividade fornecido",
+                "order": 1,
+                "name": "Nome",
+                "type": "Cliente",
+                "address": "Endereço Completo",
+                "estimatedArrival": "HH:MM",
+                "durationMinutes": 45,
+                "notes": "Justificativa",
+                "risks": { "flood": false, "towing": false, "security": false },
+                "weather": { "temp": "25°C", "condition": "Sol" }
+              }
+            ]
           }
         ]
-      }
-    ]
-  `;
+      `;
 
-  // Prepare retrieval config if coordinates exist
-  const toolConfig = currentCoords ? {
-    retrievalConfig: {
-      latLng: {
-        latitude: currentCoords.lat,
-        longitude: currentCoords.lng
+      const toolConfig = currentCoords ? {
+        retrievalConfig: {
+          latLng: { latitude: currentCoords.lat, longitude: currentCoords.lng }
+        }
+      } : undefined;
+
+      // IMPLEMENTAÇÃO DE RETRY COM DEGRADAÇÃO DE FERRAMENTAS
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (attempts < maxAttempts) {
+        try {
+            // Estratégia: 
+            // Tentativa 1: Todas as ferramentas (Maps + Search)
+            // Tentativa 2+: Apenas Maps (Maior estabilidade, menos risco de timeout 500)
+            const currentTools = (attempts === 0) 
+                ? [{ googleMaps: {}, googleSearch: {} }]
+                : [{ googleMaps: {} }];
+
+            const response = await ai.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: prompt,
+              config: {
+                tools: currentTools,
+                toolConfig: toolConfig,
+              }
+            });
+
+            let text = response.text;
+            if (!text) throw new Error("Sem resposta do Gemini");
+
+            let data: DailyItinerary[] = [];
+            const arrayMatch = text.match(/\[[\s\S]*\]/);
+            
+            if (arrayMatch) {
+                data = JSON.parse(arrayMatch[0]);
+            } else {
+                const objectMatch = text.match(/\{[\s\S]*\}/);
+                if (objectMatch) {
+                     const obj = JSON.parse(objectMatch[0]);
+                     data = Array.isArray(obj) ? obj : [obj];
+                }
+            }
+
+            if (data && Array.isArray(data)) {
+                return data.map(day => ({
+                    ...day,
+                    collaboratorId: memberId,
+                    collaboratorName: memberName,
+                    teamName: teamName,
+                    dayLabel: day.dayLabel.includes(memberName) ? day.dayLabel : `${day.dayLabel} - ${memberName}`
+                }));
+            }
+            
+            // Se chegou aqui e não parseou, lança erro para tentar novamente
+            throw new Error("Formato JSON inválido ou vazio");
+
+        } catch (error) {
+            attempts++;
+            console.warn(`Tentativa ${attempts} falhou para ${memberName}:`, error);
+            
+            if (attempts >= maxAttempts) {
+                 console.error(`Erro final ao roteirizar para ${memberName} após ${maxAttempts} tentativas.`);
+                 return [];
+            }
+            
+            // Exponential Backoff (2s, 4s, etc)
+            await new Promise(res => setTimeout(res, 2000 * attempts));
+        }
       }
-    }
-  } : undefined;
+      return [];
+  });
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        // Habilitamos googleSearch para permitir busca de previsão do tempo em tempo real se necessário
-        tools: [{ googleMaps: {}, googleSearch: {} }],
-        toolConfig: toolConfig,
+      const results = await Promise.all(routePromises);
+      
+      const combinedPlan: MultiDayPlan = results.flat().filter(Boolean) as MultiDayPlan;
+      
+      if (combinedPlan.length === 0) {
+          throw new Error("Não foi possível gerar roteiros. Verifique se as equipes estão atribuídas corretamente e se o serviço está disponível.");
       }
-    });
 
-    let text = response.text;
-    if (!text) throw new Error("Sem resposta do Gemini");
+      combinedPlan.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Robust JSON Extraction Logic
-    const arrayMatch = text.match(/\[[\s\S]*\]/);
-    if (arrayMatch) {
-      text = arrayMatch[0];
-    } else {
-      const objectMatch = text.match(/\{[\s\S]*\}/);
-      if (objectMatch) {
-        text = objectMatch[0];
-      } else {
-        console.error("Invalid JSON response:", text.substring(0, 200));
-        throw new Error("A resposta da IA não está no formato JSON esperado.");
-      }
-    }
-
-    // Parsing logic
-    let result;
-    try {
-        result = JSON.parse(text);
-    } catch (e) {
-        console.error("JSON Parse Error:", e, text);
-        throw new Error("Erro de sintaxe no JSON gerado pela IA.");
-    }
-    
-    if (Array.isArray(result)) {
-      return result as MultiDayPlan;
-    } else if (typeof result === 'object' && result !== null) {
-      if ('stops' in result) {
-         return [{
-            dayLabel: "Dia 1",
-            date: preferences.departureDate,
-            ...result
-         }] as any as MultiDayPlan;
-      }
-      return [result] as any as MultiDayPlan;
-    }
-    
-    throw new Error("Formato de resposta inválido (estrutura incorreta)");
+      return combinedPlan;
 
   } catch (error) {
-    console.error("Error generating route:", error);
-    throw new Error("Falha ao gerar a rota. " + (error as Error).message);
+    console.error("Critical Error generating consolidated route:", error);
+    throw new Error("Falha crítica na geração do roteiro consolidado. " + (error as Error).message);
   }
 };

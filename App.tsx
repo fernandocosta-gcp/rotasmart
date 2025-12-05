@@ -67,10 +67,11 @@ const App: React.FC = () => {
              }
         }
 
-        const plan = await generateRoutePlan(data, prefs, currentCoords);
+        // Pass teams to generateRoutePlan for CVRPTW Logic
+        const plan = await generateRoutePlan(data, prefs, currentCoords, teams);
         setRoutePlan(plan);
     } catch (error) {
-        alert("Erro ao gerar rota: " + (error as Error).message);
+        alert("Erro ao gerar roteiro: " + (error as Error).message);
     } finally {
         setIsLoading(false);
     }
@@ -155,7 +156,7 @@ const App: React.FC = () => {
                  />
             </div>
         ) : (
-            <Itinerary plan={routePlan} onReset={() => setRoutePlan(null)} />
+            <Itinerary plan={routePlan} teams={teams} onReset={() => setRoutePlan(null)} />
         )}
       </main>
     </div>

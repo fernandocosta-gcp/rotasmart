@@ -456,6 +456,20 @@ const TeamManagementModal: React.FC<TeamManagementModalProps> = ({ onClose, team
                                             className="w-full border border-gray-300 rounded-lg px-4 py-3 text-lg font-bold text-gray-800 bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-shadow shadow-sm"
                                             placeholder="Nome da Equipe"
                                         />
+                                        
+                                        {/* Novo campo para Endereço do Escritório */}
+                                        <div className="mt-4">
+                                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+                                                Endereço da Base / Escritório
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={activeTeam.officeAddress || ''}
+                                                onChange={(e) => updateTeam(activeTeam.id, { officeAddress: e.target.value })}
+                                                className="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-shadow shadow-sm"
+                                                placeholder="Ex: Av. Paulista, 1000 - Bela Vista, São Paulo"
+                                            />
+                                        </div>
                                     </div>
                                     
                                     <div className="md:col-span-1">
